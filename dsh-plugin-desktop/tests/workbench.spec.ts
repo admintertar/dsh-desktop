@@ -9,6 +9,8 @@ vi.mock('electron', () => ({
 }))
 vi.mock('../src/electron-runtime.ts', () => ({ ElectronDesktopRuntime: class {
   workspaceWindows: any
+  locale = 'zh'
+  scope: any
   configureTerminal = vi.fn()
   registerTrayItem = vi.fn()
   buildApplicationMenuItems = () => [{ label: 'Open DSH Terminal' }]
@@ -17,6 +19,7 @@ vi.mock('../src/electron-runtime.ts', () => ({ ElectronDesktopRuntime: class {
   mountScheduled = vi.fn()
   beginRendererBootMonitoring = async () => ({ report: { status: 'healthy' } })
   constructor(public restart: any, _report: any, _a: any, _b: any, _store: any, _c: any, scope: any) {
+    this.scope = scope
     this.workspaceWindows = scope.windows
     state.runtimes.push(this)
   }
@@ -39,7 +42,7 @@ describe('workspace application composition', () => {
     const root = mkdtempSync(join(tmpdir(), 'workbench-menu-'))
     const launch = makeLaunch(root)
     const opened = vi.fn()
-    const bench = new DesktopWorkbench({title: 'DSH Desktop', labels: {open: '打开项目', close: '关闭项目', create: '新建项目', recent: '最近项目'},
+    const bench = new DesktopWorkbench({title: 'DSH Desktop', labels: locale => locale === 'zh' ? {open: '打开项目', close: '关闭项目', create: '新建项目', recent: '最近项目'} : {open: 'Open Project', close: 'Close Project', create: 'New Project', recent: 'Recent Projects'},
       create: async () => undefined, pick: async () => undefined, onOpened: opened,
       resolve: async id => ({id, title: id, prepare: async () => launch}),
     })
@@ -52,6 +55,12 @@ describe('workspace application composition', () => {
       const menu = state.menu.mock.calls.at(-1)![0]
       expect(menu[0].submenu.some((item: any) => item.label === 'Open DSH Terminal')).toBe(true)
       expect(menu[1].submenu.map((item: any) => item.label).filter(Boolean)).toEqual(['新建项目', '打开项目', '最近项目', '关闭项目'])
+      state.runtimes[0].locale = 'en'
+      state.runtimes[0].scope.onMenuChange()
+      const english = state.menu.mock.calls.at(-1)![0]
+      expect(english[1].label).toBe('File')
+      expect(english[1].submenu.map((item: any) => item.label).filter(Boolean)).toEqual(['New Project', 'Open Project', 'Recent Projects', 'Close Project'])
+      expect(bench.locale).toBe('en')
       await bench.close('a')
       expect(state.runtimes[0].prepareToQuit).toHaveBeenCalledOnce()
     } finally { await bench.close('a'); rmSync(root, {recursive: true, force: true}) }

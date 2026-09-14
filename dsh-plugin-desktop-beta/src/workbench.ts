@@ -21,6 +21,7 @@ import { createDesktopWebProfile, selectDesktopProfile } from './profile-manager
 import { prepareTrayIcon } from './tray-icons.ts'
 import type { PreparedDesktopProfile } from './profile.ts'
 import type { DesktopStartupGenerationHost } from './startup-generation.ts'
+import type { DesktopLocale } from './runtime.ts'
 import type { DesktopProfilePreferences } from './profile-preferences.ts'
 
 export interface DesktopWorkbenchLaunch {
@@ -36,11 +37,12 @@ export interface DesktopWorkbenchTarget {
   id: string
   title: string
   prepare(): Promise<DesktopWorkbenchLaunch>
+  setup?(launch: DesktopWorkbenchLaunch, signal: AbortSignal): Promise<DesktopWorkbenchLaunch | undefined>
   selectPresentation?(mode: string, directory?: string): Promise<{ target: string; commit(): Promise<void> } | undefined>
 }
 export interface DesktopWorkbenchOptions {
   title: string
-  labels: { open: string; close: string; create?: string; recent?: string }
+  labels: { open: string; close: string; create?: string; recent?: string } | ((locale: DesktopLocale) => { open: string; close: string; create?: string; recent?: string })
   resolve(target: string): Promise<DesktopWorkbenchTarget>
   pick(): Promise<string | undefined>
   create?(): Promise<string | undefined>
@@ -72,8 +74,14 @@ export class DesktopWorkbench {
   async open(target: string): Promise<void> {
     const descriptor = await this.options.resolve(target)
     await this.registry.open(descriptor.id, async signal => {
-      const launch = await descriptor.prepare()
+      let launch = await descriptor.prepare()
       signal.throwIfAborted()
+      if (descriptor.setup) {
+        const configured = await descriptor.setup(launch, signal)
+        if (!configured) throw new DOMException('Setup was closed', 'AbortError')
+        launch = configured
+        signal.throwIfAborted()
+      }
       if (launch.prepared.openBrowser || launch.prepared.networkExposure !== 'loopback') {
         throw new Error('Workbench windows require local-only access')
       }
@@ -204,8 +212,14 @@ export class DesktopWorkbench {
     })().finally(() => { this.picker = undefined })
   }
 
+  get locale(): DesktopLocale {
+    const active = this.active ? this.windows.get(this.active) : undefined
+    return active?.runtime.locale ?? (nativeMenuLocale(app.getPreferredSystemLanguages()) === 'zh-CN' ? 'zh' : 'en')
+  }
+
   private report(operation: Promise<unknown>): void {
     void operation.catch(error => {
+      if (error instanceof Error && error.name === 'AbortError') return
       console.error(error)
       dialog.showErrorBox(this.options.title, error instanceof Error ? error.message : String(error))
     })
@@ -213,21 +227,22 @@ export class DesktopWorkbench {
 
   private changed(): void {
     this.options.onChange?.([...this.windows].map(([id, window]) => ({ id, title: window.title, status: window.status })))
-    const open = { label: this.options.labels.open, accelerator: 'CmdOrCtrl+O', click: () => this.report(this.pick()) }
+    const labels = typeof this.options.labels === 'function' ? this.options.labels(this.locale) : this.options.labels
+    const open = { label: labels.open, accelerator: 'CmdOrCtrl+O', click: () => this.report(this.pick()) }
     const windows = [...this.windows].map(([id, window]) => ({ label: window.title, type: 'checkbox' as const,
       checked: id === this.active, click: () => window.show() }))
     const current = this.active
-    const close = { label: this.options.labels.close, accelerator: 'CmdOrCtrl+W', enabled: Boolean(current),
+    const close = { label: labels.close, accelerator: 'CmdOrCtrl+W', enabled: Boolean(current),
       click: () => { if (current) this.report(this.close(current)) } }
     const active = current ? this.windows.get(current) : undefined
     const additions = active?.runtime.buildApplicationMenuItems() ?? []
-    const create = { label: this.options.labels.create ?? 'New Workspace…', accelerator: 'CmdOrCtrl+N',
+    const create = { label: labels.create ?? 'New Workspace…', accelerator: 'CmdOrCtrl+N',
       click: () => this.report((async () => { const target = await this.options.create?.(); if (target) await this.open(target) })()) }
-    const recent = { label: this.options.labels.recent ?? 'Recent Workspaces',
+    const recent = { label: labels.recent ?? 'Recent Workspaces',
       submenu: (this.options.recent?.() ?? []).map(item => ({ label: item.title,
         click: () => this.report(this.open(item.path)) })) }
     const file = [...(this.options.create ? [create] : []), open, recent, { type: 'separator' as const }, close]
-    const template = macApplicationMenuTemplate(this.options.title, nativeMenuLocale(app.getPreferredSystemLanguages()),
+    const template = macApplicationMenuTemplate(this.options.title, this.locale === 'zh' ? 'zh-CN' : 'en',
       additions, { file, windows })
     Menu.setApplicationMenu(Menu.buildFromTemplate(template))
     this.tray?.setContextMenu(Menu.buildFromTemplate([...file, { type: 'separator' }, ...additions, ...windows, { type: 'separator' }, { role: 'quit' }]))
@@ -263,3 +278,5 @@ export function prepareWorkbenchSafeMode(stateDir: string): void {
   createDesktopWebProfile(paths.homeDir, DESKTOP_SAFE_MODE_PROFILE_NAME)
   selectDesktopProfile(join(paths.userDataDir, 'profile-selection/state.json'), paths.homeDir, DESKTOP_SAFE_MODE_PROFILE_NAME)
 }
+
+export { configureWorkbenchProfile } from './workbench-setup.ts'

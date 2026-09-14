@@ -3,6 +3,7 @@
 import type { DesktopLocale } from './runtime.ts'
 
 export interface DesktopSetupWizardCopy {
+  readonly browserUnavailable: string
   readonly aaTitle: string
   readonly aaIntro: string
   readonly aaDisabled: string
@@ -84,6 +85,7 @@ export interface DesktopSetupWizardCopy {
 
 const COPY: Record<DesktopLocale, DesktopSetupWizardCopy> = {
   en: {
+    browserUnavailable: 'Browser access is unavailable in this window.',
     aaTitle: 'Agents-Anywhere',
     aaIntro: 'Use Agents-Anywhere to access DSH on this computer from your phone or a browser.',
     aaDisabled: 'Turn off phone connection',
@@ -164,6 +166,7 @@ const COPY: Record<DesktopLocale, DesktopSetupWizardCopy> = {
     invalidState: 'Setup information could not be loaded. Close this window and try again.',
   },
   zh: {
+    browserUnavailable: '此窗口不支持浏览器访问。',
     aaTitle: 'Agents-Anywhere',
     aaIntro: '通过 Agents-Anywhere，在手机或浏览器中访问这台电脑上的 DSH。',
     aaDisabled: '关闭手机连接',

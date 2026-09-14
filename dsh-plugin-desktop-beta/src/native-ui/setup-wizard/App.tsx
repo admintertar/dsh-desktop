@@ -122,8 +122,9 @@ export function decodeDesktopSetupWizardInput(search: string): DesktopSetupWizar
 
 function normalizedSelection(input: DesktopSetupWizardInput): DesktopSetupWizardSelection {
   const mode = input.platform === 'linux' ? 'compatibility' : input.mode
-  const browserAccess = mode === 'compatibility' && (input.openBrowser || input.networkExposure === 'lan')
+  const browserAccess = !input.localOnly && mode === 'compatibility' && (input.openBrowser || input.networkExposure === 'lan')
   return {
+    ...(input.presentation && input.platform !== 'linux' ? {presentation: input.presentation} : {}),
     mode,
     macosMaterial: input.macosMaterial,
     windowsMaterial: input.platform === 'win32' && input.windowsMaterial === 'mica' && !input.micaSupported
@@ -141,6 +142,7 @@ function finish(selection: DesktopSetupWizardSelection): void {
   const browserAccess = selection.mode === 'compatibility' && selection.openBrowser
   const url = new URL(`${SCHEME}//complete`)
   url.searchParams.set('mode', selection.mode)
+  if (selection.presentation) url.searchParams.set('presentation', selection.presentation)
   url.searchParams.set('macosMaterial', selection.macosMaterial)
   url.searchParams.set('windowsMaterial', selection.windowsMaterial)
   url.searchParams.set('openBrowser', String(browserAccess))
@@ -248,32 +250,33 @@ function ModeOptions({
   readonly selection: DesktopSetupWizardSelection
   readonly update: (selection: DesktopSetupWizardSelection) => void
 }): JSX.Element {
-  const modes: readonly { readonly value: DesktopSetupWizardMode; readonly title: string; readonly body: string }[] = [
-    { value: 'compatibility', title: copy.compatibilityMode, body: copy.compatibilityModeBody },
-    { value: 'extended', title: copy.extendedMode, body: input.platform === 'linux' ? copy.unavailableOnLinux : copy.extendedModeBody },
-    { value: 'advanced', title: copy.advancedMode, body: input.platform === 'linux' ? copy.unavailableOnLinux : copy.advancedModeBody },
+  const modes: readonly { readonly value: string; readonly mode: DesktopSetupWizardMode; readonly title: string; readonly body: string }[] = [
+    { value: 'compatibility', mode: 'compatibility', title: copy.compatibilityMode, body: copy.compatibilityModeBody },
+    { value: 'extended', mode: 'extended', title: copy.extendedMode, body: input.platform === 'linux' ? copy.unavailableOnLinux : copy.extendedModeBody },
+    { value: 'advanced', mode: 'advanced', title: copy.advancedMode, body: input.platform === 'linux' ? copy.unavailableOnLinux : copy.advancedModeBody },
+    ...(input.presentationModes ?? []).map(option => ({value: option.id, mode: option.mode, title: option.title, body: option.description})),
   ]
   return <RadioGroup
     aria-label={copy.presentationTitle}
     aria-orientation="vertical"
     name="setup-window-mode"
     onValueChange={value => {
-      if (value === 'compatibility' || value === 'extended' || value === 'advanced') {
-        update({
-          ...selection,
-          mode: value,
-          openBrowser: value === 'compatibility' ? selection.openBrowser : false,
-          networkExposure: value === 'compatibility' ? selection.networkExposure : 'loopback',
-        })
-      }
+      const option = modes.find(item => item.value === value)
+      if (!option || (input.platform === 'linux' && option.mode !== 'compatibility')) return
+      const {presentation: _previous, ...rest} = selection
+      update({...rest, mode: option.mode,
+        ...(option.value !== option.mode ? {presentation: option.value} : {}),
+        openBrowser: !input.localOnly && option.mode === 'compatibility' ? selection.openBrowser : false,
+        networkExposure: !input.localOnly && option.mode === 'compatibility' ? selection.networkExposure : 'loopback',
+      })
     }}
-    value={selection.mode}
+    value={selection.presentation ?? selection.mode}
   >{modes.map(option => <Choice
     body={option.body}
-    disabled={input.platform === 'linux' && option.value !== 'compatibility'}
+    disabled={input.platform === 'linux' && option.mode !== 'compatibility'}
     id={`setup-window-mode-${option.value}`}
     key={option.value}
-    selected={selection.mode === option.value}
+    selected={(selection.presentation ?? selection.mode) === option.value}
     title={option.title}
     value={option.value}
   />)}</RadioGroup>
@@ -393,19 +396,22 @@ function NotificationOptions({
 
 function BrowserOptions({
   copy,
+  localOnly = false,
   selection,
   requestBrowserAccess,
   requestExposure,
 }: {
   readonly copy: DesktopSetupWizardCopy
   readonly selection: DesktopSetupWizardSelection
+  readonly localOnly?: boolean
   readonly requestBrowserAccess: (enabled: boolean) => void
   readonly requestExposure: (exposure: DesktopSetupWizardNetworkExposure) => void
 }): JSX.Element {
   return <div className="space-y-5">
     <ToggleRow
       checked={selection.mode === 'compatibility' && selection.openBrowser}
-      description={copy.browserCompatibilityNotice}
+      disabled={localOnly}
+      description={localOnly ? copy.browserUnavailable : copy.browserCompatibilityNotice}
       id="setup-open-browser"
       label={copy.openBrowser}
       onChange={requestBrowserAccess}
@@ -466,7 +472,7 @@ export function SetupWizardStepPage({
   </Page>
   if (step === 'market') return <Page step={step} subtitle={copy.marketBody} title={copy.marketTitle}><MarketOptions copy={copy} selection={selection} update={update} /></Page>
   if (step === 'notifications') return <Page step={step} subtitle={copy.notificationsBody} title={copy.notificationsTitle}><NotificationOptions copy={copy} notifications={selection.notifications} update={notifications => { update({ ...selection, notifications }) }} /></Page>
-  if (step === 'browser') return <Page step={step} subtitle={copy.browserBody} title={copy.browserTitle}><BrowserOptions copy={copy} requestBrowserAccess={requestBrowserAccess} requestExposure={requestExposure} selection={selection} /></Page>
+  if (step === 'browser') return <Page step={step} subtitle={copy.browserBody} title={copy.browserTitle}><BrowserOptions localOnly={input.localOnly === true} copy={copy} requestBrowserAccess={requestBrowserAccess} requestExposure={requestExposure} selection={selection} /></Page>
   return <div data-setup-step={step} />
 }
 
@@ -641,8 +647,9 @@ export function resolveDesktopSetupWizardBrowserAccessRequest(
 export function confirmDesktopSetupWizardBrowserCompatibility(
   selection: DesktopSetupWizardSelection,
 ): DesktopSetupWizardSelection {
+  const {presentation: _previous, ...rest} = selection
   return {
-    ...selection,
+    ...rest,
     mode: 'compatibility',
     openBrowser: true,
     networkExposure: 'loopback',
@@ -690,6 +697,7 @@ export function SetupWizardApp(): JSX.Element {
   }
 
   const requestBrowserAccess = (enabled: boolean): void => {
+    if (input.localOnly) return
     const result = resolveDesktopSetupWizardBrowserAccessRequest(selection, enabled)
     if (result.action === 'confirm-compatibility') {
       setConfirmBrowserCompatibility(true)

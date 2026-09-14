@@ -231,3 +231,12 @@ describe('DesktopSetupWizardWindow', () => {
     await expect(result).resolves.toEqual({ action: 'quit' })
   })
 })
+
+
+it('round trips an optional custom presentation and rejects duplicate identifiers', () => {
+  const url = new URL(completeUrl(input({mode: 'advanced', openBrowser: false})))
+  url.searchParams.set('presentation', 'project')
+  expect(parseDesktopSetupWizardAction(url.href)).toMatchObject({action: 'complete', selection: {mode: 'advanced', presentation: 'project'}})
+  url.searchParams.append('presentation', 'project')
+  expect(parseDesktopSetupWizardAction(url.href)).toBeUndefined()
+})

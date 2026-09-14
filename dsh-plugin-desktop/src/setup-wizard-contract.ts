@@ -15,8 +15,16 @@ export interface DesktopSetupWizardNotifications {
   readonly notifyOnJobFailure: boolean
 }
 
+export interface DesktopSetupWizardPresentation {
+  readonly id: string
+  readonly title: string
+  readonly description: string
+  readonly mode: DesktopSetupWizardMode
+}
+
 /** Every value the launcher needs to persist after Setup completes. */
 export interface DesktopSetupWizardSelection {
+  readonly presentation?: string
   readonly mode: DesktopSetupWizardMode
   readonly macosMaterial: DesktopSetupWizardMacosMaterial
   readonly windowsMaterial: DesktopSetupWizardWindowsMaterial
@@ -29,6 +37,8 @@ export interface DesktopSetupWizardSelection {
 
 /** Fixed capabilities and current values supplied before the Host is started. */
 export interface DesktopSetupWizardInput extends DesktopSetupWizardSelection {
+  readonly presentationModes?: readonly DesktopSetupWizardPresentation[]
+  readonly localOnly?: boolean
   readonly appVersion: string
   readonly profileName: string
   readonly platform: DesktopSetupWizardPlatform
@@ -41,6 +51,7 @@ export type DesktopSetupWizardResult =
   | { readonly action: 'quit' }
 
 const SELECTION_KEYS = Object.freeze([
+  'presentation',
   'mode',
   'macosMaterial',
   'windowsMaterial',
@@ -52,6 +63,8 @@ const SELECTION_KEYS = Object.freeze([
 ] as const)
 const INPUT_KEYS = Object.freeze([
   ...SELECTION_KEYS,
+  'presentationModes',
+  'localOnly',
   'appVersion',
   'profileName',
   'platform',
@@ -70,7 +83,11 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  const actual = Object.keys(expected.includes('aaEnabled') ? { aaEnabled: false, ...value } : value)
+  const defaults: Record<string, unknown> = {}
+  for (const key of ['aaEnabled', 'presentation', 'presentationModes', 'localOnly']) {
+    if (expected.includes(key)) defaults[key] = undefined
+  }
+  const actual = Object.keys({ ...defaults, ...value })
   return actual.length === expected.length && actual.every(key => expected.includes(key))
 }
 
@@ -106,8 +123,20 @@ export function isDesktopSetupWizardNotifications(
     && NOTIFICATION_KEYS.every(key => typeof value[key] === 'boolean')
 }
 
+export function isDesktopSetupWizardPresentationId(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(value) && !isMode(value)
+}
+
+function isPresentation(value: unknown): value is DesktopSetupWizardPresentation {
+  return isObject(value) && hasExactKeys(value, ['id', 'title', 'description', 'mode'])
+    && isDesktopSetupWizardPresentationId(value.id) && isMode(value.mode)
+    && typeof value.title === 'string' && value.title.length > 0 && value.title.length <= 160
+    && typeof value.description === 'string' && value.description.length <= 1000
+}
+
 function hasSelectionValues(value: Record<string, unknown>): boolean {
-  return (value.aaEnabled === undefined || typeof value.aaEnabled === 'boolean')
+  return (value.presentation === undefined || isDesktopSetupWizardPresentationId(value.presentation))
+    && (value.aaEnabled === undefined || typeof value.aaEnabled === 'boolean')
     && isMode(value.mode)
     && isMacosMaterial(value.macosMaterial)
     && isWindowsMaterial(value.windowsMaterial)
@@ -131,6 +160,11 @@ export function isDesktopSetupWizardInput(value: unknown): value is DesktopSetup
   if (!isObject(value) || !hasExactKeys(value, INPUT_KEYS) || !hasSelectionValues(value)) {
     return false
   }
+  const modes = value.presentationModes
+  if (modes !== undefined && (!Array.isArray(modes) || modes.length > 8 || !modes.every(isPresentation)
+    || new Set(modes.map(item => item.id)).size !== modes.length)) return false
+  if (value.localOnly !== undefined && typeof value.localOnly !== 'boolean') return false
+  if (value.presentation !== undefined && !(modes as DesktopSetupWizardPresentation[] | undefined)?.some(item => item.id === value.presentation && item.mode === value.mode)) return false
   return typeof value.appVersion === 'string'
     && value.appVersion.length > 0
     && value.appVersion.length <= 128
@@ -154,8 +188,10 @@ export function isDesktopSetupWizardInput(value: unknown): value is DesktopSetup
 /** Reject selections the current platform cannot actually present. */
 export function desktopSetupWizardSelectionIsAvailable(
   selection: DesktopSetupWizardSelection,
-  capabilities: Pick<DesktopSetupWizardInput, 'platform' | 'micaSupported'>,
+  capabilities: Pick<DesktopSetupWizardInput, 'platform' | 'micaSupported' | 'presentationModes' | 'localOnly'>,
 ): boolean {
+  if (selection.presentation !== undefined && !capabilities.presentationModes?.some(item => item.id === selection.presentation && item.mode === selection.mode)) return false
+  if (capabilities.localOnly && (selection.openBrowser || selection.networkExposure !== 'loopback')) return false
   if (selection.openBrowser && selection.mode !== 'compatibility') return false
   if (!selection.openBrowser && selection.networkExposure === 'lan') return false
   if (capabilities.platform === 'linux' && selection.mode !== 'compatibility') return false

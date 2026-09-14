@@ -13,6 +13,7 @@ import {
   desktopSetupWizardSelectionIsAvailable,
   freezeDesktopSetupWizardSelection,
   isDesktopSetupWizardInput,
+  isDesktopSetupWizardPresentationId,
   type DesktopSetupWizardInput,
   type DesktopSetupWizardMarket,
   type DesktopSetupWizardMode,
@@ -83,7 +84,7 @@ export function parseDesktopSetupWizardAction(
   if (url.protocol !== SETUP_WIZARD_SCHEME
     || url.username !== '' || url.password !== '' || url.port !== ''
     || url.pathname !== '' || url.hash !== '') return undefined
-  const keys = [...url.searchParams.keys()].filter(key => key !== 'aaEnabled')
+  const keys = [...url.searchParams.keys()].filter(key => key !== 'aaEnabled' && key !== 'presentation')
   if (url.searchParams.getAll('aaEnabled').length > 1) return undefined
   if (url.hostname === 'skip') return url.searchParams.size === 0 ? Object.freeze({ action: 'skip' as const }) : undefined
   if (url.hostname !== 'complete'
@@ -91,6 +92,9 @@ export function parseDesktopSetupWizardAction(
     || keys.some(key => !COMPLETE_KEYS.includes(key as typeof COMPLETE_KEYS[number]))
     || COMPLETE_KEYS.some(key => url.searchParams.getAll(key).length !== 1)) return undefined
 
+  const presentation = url.searchParams.get('presentation')
+  if (url.searchParams.getAll('presentation').length > 1
+    || (presentation !== null && !isDesktopSetupWizardPresentationId(presentation))) return undefined
   const mode = exactMode(url.searchParams.get('mode'))
   const macosMaterial = exactMacosMaterial(url.searchParams.get('macosMaterial'))
   const windowsMaterial = exactWindowsMaterial(url.searchParams.get('windowsMaterial'))
@@ -110,6 +114,7 @@ export function parseDesktopSetupWizardAction(
     || notifyOnJobFailure === undefined) return undefined
 
   const selection = freezeDesktopSetupWizardSelection({
+    ...(presentation === null ? {} : { presentation }),
     mode,
     macosMaterial,
     windowsMaterial,
@@ -141,6 +146,8 @@ export class DesktopSetupWizardWindow {
     if (window === undefined || window.isDestroyed()) return
     revealApplication(window, this.options.input.platform)
   }
+
+  close(): void { if (this.window && !this.window.isDestroyed()) this.window.close() }
 
   async run(): Promise<DesktopSetupWizardResult> {
     if (this.started) throw new Error('dsh-plugin-desktop: Setup Wizard can only run once')
