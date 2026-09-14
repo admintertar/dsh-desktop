@@ -184,6 +184,22 @@ desktopPnpm.runPlugin(['install', '--no-frozen-lockfile'], invokingDir, signal)
 
 参数始终作为 argv 传递；不要拼接 shell 字符串，也不要依赖 Windows `.cmd` shim。服务会在完整子进程树退出后 settle，并在 generation dispose 时终止仍在运行的 operation。
 
+## 替换增强模式的侧边栏
+
+增强模式与扩展模式尊重 profile 对官方 `ui-sidebar` row 的显式禁用设置。profile 可以禁用该 row，再插入提供侧边栏的第三方 Client 插件；Desktop 继续提供自己的根布局与官方 conversation。替代插件需要注册标准 `sidebar` slot，处理它的 `collapsed`、`width` owner props，并声明自己保留的设置等子插槽。未替换的官方侧边栏仍按原有行为启用；兼容模式的组合行为不变。
+
+```yaml
+- id: ui-sidebar
+  disabled: true
+- insert:
+    - id: project-sidebar
+      name: example-project-sidebar
+      config:
+        project: project-a
+```
+
+插件仍通过普通 `dsh.client` 元数据与 `./client` artifact 加载。这个入口只改变侧边栏 occupant，不提供原生窗口或多个 Host 的管理能力。
+
 ## 不要依赖的接口
 
 `desktopRuntime`、`desktopPnpmBootstrap`、Electron `BrowserWindow`、托盘注册表、private Node helper、`ELECTRON_RUN_AS_NODE` 和生成的 shim 都是 Desktop 内部实现。即使它们出现在 declaration 或运行时上下文中，也不属于第三方兼容 contract。
