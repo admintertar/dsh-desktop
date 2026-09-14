@@ -3,11 +3,13 @@ import type { DesktopRuntime, DesktopShellSpec, DesktopTrayItem, DesktopTrayItem
 import { HostRpc } from './host-rpc.ts'
 
 export type RuntimeSnapshot = Pick<DesktopRuntime, 'platform' | 'windowsBuild' | 'locale'> & {
+  workspaceWindows?: boolean
   updates: Omit<DesktopUpdateAdapter, 'request' | 'confirmDownload' | 'showManualCheckResult' | 'downloadAndOpen' | 'notify'>
 }
 export function runtimeSnapshot(runtime: DesktopRuntime): RuntimeSnapshot {
   const { isPackaged, canDownload, currentVersion, releaseChannel, statePath, installationId } = runtime.updates
   return { platform: runtime.platform, windowsBuild: runtime.windowsBuild, locale: runtime.locale,
+    ...(runtime.workspaceWindows ? { workspaceWindows: true } : {}),
     updates: { isPackaged, canDownload, currentVersion, statePath,
       ...(releaseChannel ? { releaseChannel } : {}), ...(installationId ? { installationId } : {}) } }
 }
@@ -24,7 +26,7 @@ export function createHostRuntime(rpc: HostRpc, snapshot: RuntimeSnapshot): Desk
   const shellSpecs = new Map<string, DesktopShellSpec>()
   const send = <T = void>(method: string, args: unknown[] = [], signal?: AbortSignal): Promise<T> => {
     const interactive = ['update:confirmDownload', 'update:showManualCheckResult', 'update:downloadAndOpen',
-      'native:pickDirectory', 'native:exportDiagnostics'].includes(method)
+      'native:pickDirectory', 'native:exportDiagnostics', 'windows:open'].includes(method)
     const task = rpc.call<T>(method, args, signal, interactive ? 0 : undefined)
     calls.add(task)
     // Report fire-and-forget failures without creating an unhandled rejection.
@@ -37,6 +39,11 @@ export function createHostRuntime(rpc: HostRpc, snapshot: RuntimeSnapshot): Desk
     return { id, release: () => releases.forEach(dispose => dispose()) }
   }
   const runtime: DesktopRuntime = {
+    ...(snapshot.workspaceWindows ? { workspaceWindows: {
+      list: () => send<readonly { id: string; title: string; current: boolean }[]>('windows:list'),
+      open: () => send('windows:open'), focus: (id: string) => send('windows:focus', [id]),
+      close: () => send('windows:close'),
+    } } : {}),
     platform: snapshot.platform, windowsBuild: snapshot.windowsBuild,
     get locale() { return locale },
     updates: {
@@ -124,6 +131,17 @@ export function bindNativeRuntime(rpc: HostRpc, runtime: DesktopRuntime): () => 
   const handle = (name: string, fn: (args: any[], signal: AbortSignal) => unknown) => { releases.push(rpc.handle(name, fn)) }
   const callback = (method: string, args: unknown[] = []) => rpc.call(method, args)
   const report = (promise: Promise<unknown>) => { void promise.catch(error => process.stderr.write(`${String(error)}\n`)) }
+  if (runtime.workspaceWindows) {
+    const windows = runtime.workspaceWindows
+    handle('windows:list', () => windows.list())
+    handle('windows:open', () => windows.open())
+    handle('windows:focus', ([id]) => {
+      if (typeof id !== 'string') throw new TypeError('Window identity must be a string')
+      return windows.focus(id)
+    })
+    // Respond before disposing the requesting Host's own RPC channel.
+    handle('windows:close', () => { setImmediate(() => report(windows.close())) })
+  }
   for (const method of ['show', 'notifyAttention', 'openTerminal', 'reloadRenderer', 'toggleDeveloperTools',
     'exportDiagnostics', 'pickDirectory', 'validateDirectory', 'reportRendererBoot', 'setLocalePreference',
     'setThemeSource', 'prepareToQuit'] as const) {

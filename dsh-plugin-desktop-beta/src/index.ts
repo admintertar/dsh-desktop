@@ -251,6 +251,9 @@ export function apply(ctx: Context, config: Config): void {
     {
       applies: 'restart',
       validate: (value) => {
+        if (runtime.workspaceWindows && (value.mode !== 'advanced' || value.openBrowser || value.networkExposure !== 'loopback')) {
+          throw new Error('Workspace windows use the enhanced shell with local-only access')
+        }
         if (!desktopBrowserAccessAvailable(value.mode) && value.openBrowser) {
           throw new Error('dsh-plugin-desktop: browser access requires compatibility mode')
         }

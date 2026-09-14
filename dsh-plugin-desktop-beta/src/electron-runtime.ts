@@ -26,6 +26,7 @@ import type {
   DesktopShellSpec,
   DesktopTerminalSpec,
   DesktopThemeSource,
+  DesktopWindowScope,
   DesktopTrayItem,
   DesktopTrayItemGroup,
   DesktopTrayItemRegistration,
@@ -123,6 +124,7 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
     workspaceVolumeQuery: WindowsVolumeQuery | undefined = undefined,
     private readonly mainWindowState: MainWindowStateStore = new FileMainWindowStateStore(app.getPath('userData')),
     installationId?: DesktopInstallationId,
+    private readonly windowScope?: DesktopWindowScope,
   ) {
     this.platformStrategy = electronPlatformStrategy()
     this.platform = this.platformStrategy.platform
@@ -153,6 +155,8 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
       notify: notification => { this.showNotification(notification) },
     }
   }
+
+  get workspaceWindows() { return this.windowScope?.windows }
 
   /** Log an Electron-scope error to the sink, falling back to stderr without a logger. */
   private logError(message: string): void {
@@ -193,6 +197,7 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
 
   /** @inheritdoc */
   schedule(spec: DesktopShellSpec): () => Promise<void> {
+    if (this.windowScope && spec.mode !== 'advanced') throw new Error('Scoped windows require the enhanced shell')
     if (this.scheduled !== undefined || this.mountTask !== undefined) {
       throw new Error('dsh-plugin-desktop: a native shell generation is already registered')
     }
@@ -213,7 +218,7 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
           this.generation = undefined
           this.mountTask = undefined
           if (this.scheduled === spec) {
-            if (this.platform !== 'linux') nativeTheme.themeSource = previousThemeSource
+            if (!this.windowScope && this.platform !== 'linux') nativeTheme.themeSource = previousThemeSource
             this.scheduled = undefined
           }
         }
@@ -240,6 +245,7 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
         reportError: cause => this.logError(`Remote control notice: ${String(cause)}`),
       }) : undefined
       const generation = new ElectronShellGeneration({
+        ...(this.windowScope ? { scope: this.windowScope } : {}),
         platform: this.platformStrategy,
         spec,
         preloadPath: desktopPreloadPath(),
@@ -282,7 +288,7 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
       this.generation = generation
       this.mountTask = generation.mount(beforeInteractive).then(() => {
         this.rendererHealthGate?.acceptNativeMount()
-        void this.offerUpdateArtifactCleanup().catch((cause: unknown) => {
+        if (!this.windowScope) void this.offerUpdateArtifactCleanup().catch((cause: unknown) => {
           this.logError(`dsh-plugin-desktop: failed to resolve update installer cleanup: ${cause instanceof Error ? cause.message : String(cause)}`)
         })
       }).catch((cause: unknown) => {
@@ -379,7 +385,7 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
         productVersion: PRODUCT_VERSION,
         profileDir: spec.profileDir,
         homeDir: spec.homeDir,
-        stateDir: desktopTerminalStateDirectory(app.getPath('userData'), spec.profileName),
+        stateDir: desktopTerminalStateDirectory(this.windowScope?.stateDir ?? app.getPath('userData'), spec.profileName),
         spawn,
         onLaunchError: cause => { this.reportTerminalLaunchError(cause) },
       })
@@ -475,7 +481,7 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
 
   /** @inheritdoc */
   setThemeSource(source: DesktopThemeSource): void {
-    if (this.platform !== 'linux' && this.generation !== undefined) {
+    if (!this.windowScope && this.platform !== 'linux' && this.generation !== undefined) {
       nativeTheme.themeSource = source
       // Windows can retain the preceding DWM Mica palette until the window is
       // recomposed (for example after minimize/restore). Reapplying the active
@@ -914,6 +920,7 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
 
   /** Rebuild the macOS application menu from the same native, Host-owned commands as the tray. */
   private rebuildApplicationMenu(): void {
+    if (this.windowScope) return
     this.platformStrategy.refreshApplicationMenu(this.buildApplicationMenuItems())
   }
 

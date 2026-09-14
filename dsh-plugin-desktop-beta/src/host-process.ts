@@ -10,6 +10,8 @@ import type { DesktopStartupGenerationHost } from './startup-generation.ts'
 import type { DesktopLanHttpsRuntimeOptions } from './lan-https-runtime.ts'
 
 export interface IsolatedHostOptions {
+  cwd?: string
+  environment?: NodeJS.ProcessEnv
   host: DesktopHostOptions
   runtime: DesktopRuntime
   rendererToken: string
@@ -21,7 +23,7 @@ export interface IsolatedHostOptions {
 
 export async function startIsolatedDesktopHost(options: IsolatedHostOptions): Promise<void> {
   const child = utilityProcess.fork(fileURLToPath(new URL('./host-process-entry.js', import.meta.url)), [], {
-    serviceName: 'DSH Host', stdio: 'pipe', cwd: process.cwd(), env: { ...process.env },
+    serviceName: 'DSH Host', stdio: 'pipe', cwd: options.cwd ?? process.cwd(), env: { ...(options.environment ?? process.env) },
   })
   // Keep normal Host logs in its own files; stderr includes bootstrap failures.
   child.stdout?.on('data', (data: Buffer) => { process.stdout.write(data) })
@@ -65,7 +67,7 @@ export async function startIsolatedDesktopHost(options: IsolatedHostOptions): Pr
   options.bindHost({ fiber: { dispose: stop } })
   try {
     const { desktopLaunchEnvironment, ...host } = options.host
-    await rpc.call('boot', [{ ...host, launchEnvironmentLayers: serializeHostEnvironment(desktopLaunchEnvironment) }, runtimeSnapshot(options.runtime), options.rendererToken])
+    await rpc.call('boot', [{ ...host, launchEnvironmentLayers: serializeHostEnvironment(desktopLaunchEnvironment, Object.keys(options.environment ?? process.env)) }, runtimeSnapshot(options.runtime), options.rendererToken])
     booted = true
   } catch (cause) {
     await stop()

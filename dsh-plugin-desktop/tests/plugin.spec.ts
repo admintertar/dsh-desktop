@@ -635,6 +635,19 @@ describe('desktop Host plugin', () => {
     expect(() => apply(harness.ctx, { ...config, networkExposure: 'lan' })).not.toThrow()
   })
 
+  it('keeps workspace windows on the enhanced local presentation before settings are saved', () => {
+    const harness = createHarness('darwin')
+    Object.assign(harness.runtime, { workspaceWindows: {} })
+    apply(harness.ctx, { ...config, mode: 'advanced' })
+    const options = vi.mocked(harness.ctx.settings.register).mock.calls[0]?.[2]
+    const settings: DesktopSettings = { mode: 'advanced', macosMaterial: 'transparent', windowsMaterial: 'off',
+      port: 43120, openBrowser: false, networkExposure: 'loopback', logLevel: 'info' }
+    expect(() => options?.validate?.(settings)).not.toThrow()
+    expect(() => options?.validate?.({ ...settings, mode: 'compatibility' })).toThrow('Workspace windows')
+    expect(() => options?.validate?.({ ...settings, openBrowser: true })).toThrow('Workspace windows')
+    expect(() => options?.validate?.({ ...settings, networkExposure: 'lan' })).toThrow('Workspace windows')
+  })
+
   it('validates the effective Linux mode while a browser migration is deferred', () => {
     const harness = createHarness('linux')
     apply(harness.ctx, config)

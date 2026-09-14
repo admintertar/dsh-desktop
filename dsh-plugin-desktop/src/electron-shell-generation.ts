@@ -16,7 +16,7 @@ import { formatDesktopExitCode } from './desktop-logger.ts'
 import { showDesktopMessageBox } from './desktop-dialog-window.ts'
 import { applicationNeedsReveal, revealApplication } from './electron-reveal.ts'
 import type { ElectronPlatformStrategy } from './electron-platform.ts'
-import type { DesktopNotification, DesktopShellSpec } from './runtime.ts'
+import type { DesktopNotification, DesktopShellSpec, DesktopWindowScope } from './runtime.ts'
 import { prepareTrayIcon } from './tray-icons.ts'
 import { desktopWindowOptions } from './window-options.ts'
 import type { DesktopRestartConfirmationCopy } from './tray-locale.ts'
@@ -164,6 +164,7 @@ function isZoomShortcut(input: Electron.Input): 'in' | 'out' | 'reset' | undefin
 }
 
 export interface ElectronShellGenerationOptions {
+  readonly scope?: DesktopWindowScope
   readonly platform: ElectronPlatformStrategy
   readonly spec: DesktopShellSpec
   readonly preloadPath: string
@@ -245,9 +246,9 @@ export class ElectronShellGeneration {
     if (icon.isEmpty()) {
       throw new Error(`dsh-plugin-desktop: failed to load application icon ${spec.iconPath}`)
     }
-    platform.configureApplication(icon, spec.productName, this.options.buildApplicationMenuItems())
+    if (!this.options.scope) platform.configureApplication(icon, spec.productName, this.options.buildApplicationMenuItems())
     const origin = new URL(spec.url).origin
-    if (platform.platform !== 'linux') nativeTheme.themeSource = spec.readThemeSource()
+    if (!this.options.scope && platform.platform !== 'linux') nativeTheme.themeSource = spec.readThemeSource()
     let persistedBounds: MainWindowBounds | undefined
     let restoredBounds: MainWindowBounds | undefined
     try {
@@ -264,6 +265,11 @@ export class ElectronShellGeneration {
     }
     const isolated = spec.mode !== 'advanced' && platform.platform !== 'linux'
     const windowOptions = desktopWindowOptions(spec, icon, platform.platform, this.options.preloadPath)
+    if (this.options.scope) {
+      if (spec.mode !== 'advanced') throw new Error('Scoped windows require the enhanced shell')
+      windowOptions.webPreferences = { ...windowOptions.webPreferences, partition: this.options.scope.partition }
+      windowOptions.title = this.options.scope.title
+    }
     const window = new BrowserWindow({
       ...windowOptions,
       ...(isolated ? { webPreferences: {
@@ -275,7 +281,7 @@ export class ElectronShellGeneration {
       } } : {}),
       ...(restoredBounds ?? {}),
     })
-    window.accessibleTitle = spec.windowTitle
+    window.accessibleTitle = this.options.scope?.title ?? spec.windowTitle
     platform.configureWindow(window)
     const refreshNativeMaterial = (): void => {
       platform.refreshThemeMaterial(window, spec.material)
@@ -379,6 +385,7 @@ export class ElectronShellGeneration {
       persistWindowState()
       if (this.options.isQuitting()) return
       event.preventDefault()
+      if (this.options.scope) { this.options.scope.requestClose(); return }
       if (platform.platform === 'darwin' && fullscreenExitPending) {
         hideAfterFullscreenExit = true
         restoreAfterFullscreenExit = false
@@ -472,7 +479,7 @@ export class ElectronShellGeneration {
       if (this.recoveryContentLoaded) this.rendererRecovery.loaded()
     }
 
-    app.on('activate', activate)
+    if (!this.options.scope) app.on('activate', activate)
     const resetSurface = (): void => {
       this.surfaceWatchdog.reset()
       this.rendererRecovery.visibilityChanged()
@@ -481,9 +488,11 @@ export class ElectronShellGeneration {
     window.on('minimize', resetSurface)
     window.on('show', resetSurface)
     window.on('restore', resetSurface)
-    if (platform.platform === 'darwin') app.on('did-become-active', activate)
+    if (!this.options.scope && platform.platform === 'darwin') app.on('did-become-active', activate)
     window.on('close', close)
     window.on('focus', clearAttention)
+    const focusScope = (): void => { this.options.scope?.onFocus() }
+    window.on('focus', focusScope)
     window.on('move', scheduleWindowStateWrite)
     window.on('resize', scheduleWindowStateWrite)
     window.on('page-title-updated', preserveBlankTitle)
@@ -525,6 +534,7 @@ export class ElectronShellGeneration {
       if (platform.platform === 'darwin') app.off('did-become-active', activate)
       window.off('close', close)
       window.off('focus', clearAttention)
+      window.off('focus', focusScope)
       window.off('move', scheduleWindowStateWrite)
       window.off('resize', scheduleWindowStateWrite)
       window.off('page-title-updated', preserveBlankTitle)
@@ -564,11 +574,13 @@ export class ElectronShellGeneration {
       if (isolated) await renderer.loadURL(spec.url)
       else await window.loadURL(spec.url)
       if (isolated) renderer.focus()
-      tray = new Tray(prepareTrayIcon(spec.trayIcons, platform.platform))
-      this.tray = tray
-      tray.setToolTip(spec.productName)
-      this.refreshTrayMenu()
-      tray.on('click', show)
+      if (!this.options.scope) {
+        tray = new Tray(prepareTrayIcon(spec.trayIcons, platform.platform))
+        this.tray = tray
+        tray.setToolTip(spec.productName)
+        this.refreshTrayMenu()
+        tray.on('click', show)
+      }
       beforeInteractive?.()
       this.mounted = true
       this.surfaceWatchdog.start()

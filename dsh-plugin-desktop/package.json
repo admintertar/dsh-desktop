@@ -19,6 +19,10 @@
     "dsh-plugin-desktop": "lib/bin.js"
   },
   "exports": {
+    "./workbench": {
+      "types": "./lib/types/workbench.d.ts",
+      "default": "./lib/workbench.js"
+    },
     ".": {
       "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"

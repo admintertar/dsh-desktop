@@ -21,6 +21,7 @@ export default defineConfig([
       'packaged-runtime-smoke': 'src/packaged-runtime-smoke.ts',
       runtime: 'src/runtime.ts',
       'electron-runtime': 'src/electron-runtime.ts',
+      workbench: 'src/workbench.ts',
       'desktop-runtime-environment': 'src/desktop-runtime-environment.ts',
       'desktop-terminal': 'src/desktop-terminal.ts',
       'desktop-cli': 'src/desktop-cli.ts',

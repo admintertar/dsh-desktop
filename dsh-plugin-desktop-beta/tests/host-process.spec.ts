@@ -41,3 +41,18 @@ it('reports unexpected Host exit without automatically relaunching or replaying 
   await f.host().fiber.dispose()
   expect(f.child.kill).not.toHaveBeenCalled()
 })
+
+it('passes per-window cwd and environment without mutating the main process', async () => {
+  const f = fixture()
+  const before = process.env.DSH_HOME
+  f.options.cwd = '/projects/a'
+  const environment = { DSH_HOME: '/projects/a/.runtime', PATH: '/tools', PROJECT_ONLY: 'a' }
+  f.options.environment = environment
+  f.options.host.desktopLaunchEnvironment = createLaunchEnvironmentSnapshot([{ source: 'process', values: environment }])
+  await startIsolatedDesktopHost(f.options)
+  expect(state.fork.mock.lastCall?.[2]).toMatchObject({ cwd: '/projects/a', env: f.options.environment })
+  expect(process.env.DSH_HOME).toBe(before)
+  const boot = f.child.postMessage.mock.calls.find(([message]) => message.method === 'boot')?.[0] as any
+  expect(boot.args[0].launchEnvironmentLayers[0].values.PROJECT_ONLY).toBe('a')
+  await f.host().fiber.dispose()
+})

@@ -25,6 +25,7 @@ it('preserves the Web URL and authentication while projecting shell and tray cal
   const release = bindNativeRuntime(parent, native)
   try {
     const runtime = createHostRuntime(child, runtimeSnapshot(native))
+    expect(runtime.workspaceWindows).toBeUndefined()
     let language: 'zh' | undefined
     const mode = vi.fn(async () => {})
     const invoke = vi.fn(async () => {})
@@ -58,5 +59,27 @@ it('preserves the Web URL and authentication while projecting shell and tray cal
     expect(await response.json()).toEqual({ version: '2.0.8-beta.1' })
     await stopShell()
     expect(disposeShell).toHaveBeenCalledOnce()
+  } finally { await release(); parent.close(); child.close(); port1.close(); port2.close() }
+})
+
+it('projects only the workspace window capability granted to this Host', async () => {
+  const { port1, port2 } = new MessageChannel()
+  const [parent, child] = [port1, port2].map(port => new HostRpc({
+    send: value => port.postMessage(value),
+    listen: receive => { port.on('message', receive); return () => { port.off('message', receive) } },
+  })) as [HostRpc, HostRpc]
+  const windows = { list: vi.fn(async () => [{ id: 'a', title: 'A', current: true }]),
+    open: vi.fn(async () => {}), focus: vi.fn(async (_id: string) => {}), close: vi.fn(async () => {}) }
+  const native = { platform: 'darwin', locale: 'en', updates: {}, workspaceWindows: windows } as unknown as DesktopRuntime
+  const release = bindNativeRuntime(parent, native)
+  try {
+    const runtime = createHostRuntime(child, runtimeSnapshot(native))
+    expect(await runtime.workspaceWindows!.list()).toEqual([{ id: 'a', title: 'A', current: true }])
+    await runtime.workspaceWindows!.open()
+    await runtime.workspaceWindows!.focus('a')
+    expect(windows.open).toHaveBeenCalledOnce()
+    expect(windows.focus).toHaveBeenCalledWith('a')
+    await expect(child.call('windows:focus', [42])).rejects.toThrow('identity')
+    expect(windows.focus).toHaveBeenCalledOnce()
   } finally { await release(); parent.close(); child.close(); port1.close(); port2.close() }
 })

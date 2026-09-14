@@ -1,5 +1,7 @@
 /** Utility-process entrypoint. No BrowserWindow or Electron main APIs are imported here. */
 import { createLaunchEnvironmentSnapshot, type LaunchEnvironmentLayerInput } from '@deepseek-ai/dsh-launch-environment'
+import { loadLayeredEnv } from '@deepseek-ai/dsh-app-boot'
+import { withDesktopDshHome } from './launch-environment.ts'
 import { HostRpc } from './host-rpc.ts'
 import { createHostRuntime, type RuntimeSnapshot } from './host-runtime-bridge.ts'
 import { bootDesktopHost, type DesktopHostOptions } from './host-bootstrap.ts'
@@ -30,7 +32,9 @@ rpc.handle('stop', async () => {
 })
 rpc.handle('boot', async args => {
   const [wire, snapshot, token] = args as [Omit<DesktopHostOptions, 'desktopLaunchEnvironment'> & { launchEnvironmentLayers: LaunchEnvironmentLayerInput[] }, RuntimeSnapshot, string]
-  const options: DesktopHostOptions = { ...wire, desktopLaunchEnvironment: createLaunchEnvironmentSnapshot(wire.launchEnvironmentLayers) }
+  const options: DesktopHostOptions = { ...wire, desktopLaunchEnvironment: wire.loadProjectEnvironment
+    ? withDesktopDshHome(loadLayeredEnv('dsh-plugin-desktop'), wire.homeDir)
+    : createLaunchEnvironmentSnapshot(wire.launchEnvironmentLayers) }
   if (starting || stopping) throw new Error('DSH Host generation already started or stopped')
   starting = true
   const runtime = createHostRuntime(rpc, snapshot)

@@ -395,6 +395,40 @@ describe('Electron desktop runtime', () => {
     vi.restoreAllMocks()
   })
 
+  it('mounts independent enhanced windows while leaving app menu, tray and activation to the workbench', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
+    const { ElectronDesktopRuntime } = await import('../src/electron-runtime.ts')
+    const create = (id: string) => {
+      const close = vi.fn()
+      const runtime = new ElectronDesktopRuntime(async () => {}, () => {}, undefined, undefined,
+        { read: () => undefined, write: () => {} }, undefined, {
+          partition: `persist:workspace-${id}`, title: id, stateDir: `/tmp/workspace-${id}`,
+          onFocus: vi.fn(), requestClose: close,
+          windows: { list: async () => [], open: async () => {}, focus: async () => {}, close: async () => {} },
+        })
+      return { runtime, close, dispose: runtime.schedule({ ...spec, mode: 'advanced' }) }
+    }
+    const a = create('a'), b = create('b')
+    await a.runtime.mountScheduled()
+    await b.runtime.mountScheduled()
+    expect(electron.browserWindowOptions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: 'a', webPreferences: expect.objectContaining({ partition: 'persist:workspace-a' }) }),
+      expect.objectContaining({ title: 'b', webPreferences: expect.objectContaining({ partition: 'persist:workspace-b' }) }),
+    ]))
+    expect(electron.trays).toHaveLength(0)
+    expect(electron.Menu.setApplicationMenu).not.toHaveBeenCalled()
+    expect(electron.app.on.mock.calls.some(([event]) => event === 'activate')).toBe(false)
+    const closeHandler = electron.browserWindowOn.mock.calls.find(([event]) => event === 'close')?.[1]
+    closeHandler({ preventDefault: vi.fn() })
+    expect(a.close).toHaveBeenCalledOnce()
+    expect(b.close).not.toHaveBeenCalled()
+    a.runtime.prepareToQuit()
+    await a.dispose()
+    expect(electron.browserWindows[1]?.destroy).not.toHaveBeenCalled()
+    b.runtime.prepareToQuit()
+    await b.dispose()
+  })
+
   it('uses the independent macOS compatibility frame, Dock icon, and template tray image', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
     electron.app.getPreferredSystemLanguages.mockReturnValue(['zh-Hans-CN', 'en-US'])
