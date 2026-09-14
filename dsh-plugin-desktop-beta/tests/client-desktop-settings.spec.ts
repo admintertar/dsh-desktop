@@ -1,3 +1,4 @@
+import { DesktopPresentationModes } from '../src/client/presentation-modes.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -594,6 +595,7 @@ describe('Desktop settings Slot registration', () => {
     const inject = vi.fn((_name: string, mount: () => unknown) => mount())
     const localeRegister = vi.fn(() => () => {})
     const ctx = {
+      provide: vi.fn(),
       settingsScope: { bind },
       locale: {
         bind: (namespace: string) => (key: string) => `${namespace}:${key}`,
@@ -648,5 +650,14 @@ describe('Desktop settings Slot registration', () => {
     expect(actionComponent).toBe(DesktopTerminalSettingsAction)
     await control.setMode('extended')
     expect(scope.set).toHaveBeenCalledWith('mode', 'extended')
+    const presentationModes = options.inject().presentationModes as DesktopPresentationModes
+    const leave = vi.fn(async () => {})
+    presentationModes.register({id: 'project', title: '项目模式', description: 'Enhanced project shell',
+      active: true, select: async () => {}, leave})
+    scope.set.mockClear()
+    await control.setMode('advanced')
+    expect(leave).toHaveBeenCalledWith('advanced')
+    expect(scope.set).not.toHaveBeenCalled()
+
   })
 })

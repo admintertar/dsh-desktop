@@ -634,7 +634,7 @@ describe('desktop Host plugin', () => {
     expect(() => apply(harness.ctx, { ...config, networkExposure: 'lan' })).not.toThrow()
   })
 
-  it('keeps workspace windows on the enhanced local presentation before settings are saved', () => {
+  it('keeps workspace windows local while permitting the built-in presentations', () => {
     const harness = createHarness('darwin')
     Object.assign(harness.runtime, { workspaceWindows: {} })
     apply(harness.ctx, { ...config, mode: 'advanced' })
@@ -642,7 +642,7 @@ describe('desktop Host plugin', () => {
     const settings: DesktopSettings = { mode: 'advanced', macosMaterial: 'transparent', windowsMaterial: 'off',
       port: 43120, openBrowser: false, networkExposure: 'loopback', logLevel: 'info' }
     expect(() => options?.validate?.(settings)).not.toThrow()
-    expect(() => options?.validate?.({ ...settings, mode: 'compatibility' })).toThrow('Workspace windows')
+    expect(() => options?.validate?.({ ...settings, mode: 'compatibility' })).not.toThrow()
     expect(() => options?.validate?.({ ...settings, openBrowser: true })).toThrow('Workspace windows')
     expect(() => options?.validate?.({ ...settings, networkExposure: 'lan' })).toThrow('Workspace windows')
   })

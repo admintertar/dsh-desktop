@@ -34,17 +34,18 @@ export class CompatibilityShell {
     private readonly platform: DesktopPlatform,
     preload: string,
     private readonly actions: CompatibilityShellActions,
+    partition?: string,
   ) {
     this.chromeView = new WebContentsView({ webPreferences: {
       preload: fileURLToPath(new URL('./compatibility-preload.cjs', import.meta.url)),
-      partition: 'dsh-desktop-compatibility-chrome',
+      partition: partition ? `${partition}-chrome` : 'dsh-desktop-compatibility-chrome',
       contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true,
     } })
     this.chromeView.setBackgroundColor('#00000000')
     this.chrome = this.chromeView.webContents
     this.content = new WebContentsView({ webPreferences: {
       preload,
-      partition: DESKTOP_RENDERER_SESSION_PARTITION,
+      partition: partition ?? DESKTOP_RENDERER_SESSION_PARTITION,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,

@@ -1,4 +1,4 @@
-/** Opt-in enhanced multi-window application. The ordinary Desktop launcher is unchanged. */
+/** Opt-in multi-window application. The ordinary Desktop launcher is unchanged. */
 import { app, dialog, Menu, nativeImage, Tray } from 'electron'
 import { createHash } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
@@ -14,6 +14,10 @@ import { installDesktopPnpmRuntime } from './desktop-runtime-environment.ts'
 import { packagedDependencyPath } from './packaged-runtime-path.ts'
 import { desktopReleaseUserDataLocations } from './profile-channel-admission.ts'
 import { desktopProfilePreferencesFromSettings } from './profile-preferences.ts'
+import { macApplicationMenuTemplate, nativeMenuLocale } from './native-menu.ts'
+import { desktopTrayLabel } from './tray-locale.ts'
+import { resetDesktopSafeModeEnvironment, DESKTOP_SAFE_MODE_PROFILE_NAME } from './safe-mode.ts'
+import { createDesktopWebProfile, selectDesktopProfile } from './profile-manager.ts'
 import { prepareTrayIcon } from './tray-icons.ts'
 import type { PreparedDesktopProfile } from './profile.ts'
 import type { DesktopStartupGenerationHost } from './startup-generation.ts'
@@ -21,6 +25,7 @@ import type { DesktopProfilePreferences } from './profile-preferences.ts'
 
 export interface DesktopWorkbenchLaunch {
   prepared: PreparedDesktopProfile
+  presentation?: string
   preferences: DesktopProfilePreferences
   homeDir: string
   stateDir: string
@@ -31,12 +36,17 @@ export interface DesktopWorkbenchTarget {
   id: string
   title: string
   prepare(): Promise<DesktopWorkbenchLaunch>
+  selectPresentation?(mode: string, directory?: string): Promise<{ target: string; commit(): Promise<void> } | undefined>
 }
 export interface DesktopWorkbenchOptions {
   title: string
-  labels: { menu: string; open: string; close: string }
+  labels: { open: string; close: string; create?: string; recent?: string }
   resolve(target: string): Promise<DesktopWorkbenchTarget>
   pick(): Promise<string | undefined>
+  create?(): Promise<string | undefined>
+  recent?(): readonly { path: string; title: string }[]
+  onOpened?(target: string, title: string): void
+  recover?(mode: 'recovery' | 'safe-mode', launch: DesktopWorkbenchLaunch): Promise<void>
   onChange?(windows: readonly { id: string; title: string; status: string }[]): void
 }
 interface Window extends ManagedDesktopWindow {
@@ -46,7 +56,7 @@ interface Window extends ManagedDesktopWindow {
   status: string
 }
 
-/** One app lock, one menu and one tray; each enhanced window owns its Host. */
+/** One app lock, one menu and one tray; each window owns its Host. */
 export class DesktopWorkbench {
   private readonly registry = new DesktopWindowRegistry<Window>()
   private readonly windows = new Map<string, Window>()
@@ -64,8 +74,8 @@ export class DesktopWorkbench {
     await this.registry.open(descriptor.id, async signal => {
       const launch = await descriptor.prepare()
       signal.throwIfAborted()
-      if (launch.prepared.mode !== 'advanced' || launch.prepared.openBrowser || launch.prepared.networkExposure !== 'loopback') {
-        throw new Error('This workbench requires an enhanced local-only Profile')
+      if (launch.prepared.openBrowser || launch.prepared.networkExposure !== 'loopback') {
+        throw new Error('Workbench windows require local-only access')
       }
       const environment = { ...launch.environment, DSH_HOME: launch.homeDir,
         DSH_AGENTS_HOME: join(launch.homeDir, 'agents') }
@@ -78,9 +88,10 @@ export class DesktopWorkbench {
       const id = descriptor.id
       let host: DesktopStartupGenerationHost | undefined
       const runtime = new ElectronDesktopRuntime(async targetMode => {
-        if (targetMode) throw new Error('Recovery launches require the ordinary Desktop launcher')
+        if (targetMode && !this.options.recover) throw new Error('Recovery launcher is unavailable')
         await this.close(id)
-        await this.open(target)
+        if (targetMode) await this.options.recover!(targetMode, launch)
+        else await this.open(target)
       }, report => {
         const window = this.windows.get(id)
         if (window) { window.status = report.status; this.changed() }
@@ -89,12 +100,37 @@ export class DesktopWorkbench {
         title: descriptor.title, stateDir: launch.stateDir,
         partition: `persist:dsh-workbench-${createHash('sha256').update(id).digest('hex')}`,
         onFocus: () => { this.active = id; this.changed() },
+        onMenuChange: () => this.changed(),
         requestClose: () => { this.report(this.close(id)) },
         windows: {
           list: async () => [...this.windows].map(([key, value]) => ({ id: key, title: value.title, current: key === id })),
           open: () => this.pick(),
           focus: async key => { const window = this.windows.get(key); if (!window) throw new Error('Window is no longer open'); window.show() },
           close: () => this.close(id),
+          presentation: async () => launch.presentation ?? launch.prepared.mode,
+          selectPresentation: async (mode, directory) => {
+            if (!descriptor.selectPresentation) throw new Error('Presentation selection is unavailable')
+            const selection = await descriptor.selectPresentation(mode, directory)
+            if (!selection) return
+            // Acknowledge the originating Host before closing its RPC channel.
+            setImmediate(() => this.report((async () => {
+              const destination = await this.options.resolve(selection.target)
+              if (destination.id !== id) {
+                // Deduplicate/open the destination before touching its Profile.
+                await this.open(selection.target)
+                const other = this.windows.get(destination.id)!
+                if (await other.runtime.workspaceWindows!.presentation!() !== mode) {
+                  await other.runtime.workspaceWindows!.selectPresentation!(mode)
+                }
+                other.show()
+                await this.close(id)
+                return
+              }
+              await this.close(id)
+              await selection.commit()
+              await this.open(selection.target)
+            })()))
+          },
         },
       })
       const window: Window = { runtime, title: descriptor.title, target, status: 'starting',
@@ -108,18 +144,20 @@ export class DesktopWorkbench {
           this.changed()
         },
       }
+      runtime.configureTerminal({ profileName: launch.prepared.profile.name,
+        profileDir: launch.prepared.profile.dir, homeDir: launch.homeDir })
+      runtime.registerTrayItem({ group: 'tools', order: 100,
+        label: () => desktopTrayLabel(runtime.locale, 'enterSafeMode'), invoke: () => runtime.requestSafeModeRestart() })
       this.windows.set(id, window)
       this.active = id
       this.changed()
       try {
         const access = createDesktopBrowserAccess(false)
         const prepared = launch.prepared
-        // Keep the shared application presentation fixed while retaining ordinary
-        // provider/theme/chat settings in each Host.
         await startIsolatedDesktopHost({
           cwd: launch.cwd, environment, runtime, rendererToken: access.rendererHeader.value,
           host: { prepared, loadProjectEnvironment: true,
-            profilePreferences: desktopProfilePreferencesFromSettings(launch.preferences, launch.preferences.notifications, launch.preferences.market),
+            profilePreferences: desktopProfilePreferencesFromSettings(launch.preferences, launch.preferences.notifications, launch.preferences.market, launch.preferences.aaEnabled === true),
             homeDir: launch.homeDir, activeProfileName: prepared.profile.name,
             pluginManagementStatePath: join(launch.stateDir, 'plugin-management/state.json'),
             selectionStatePath: join(launch.stateDir, 'profile-selection/state.json'),
@@ -147,6 +185,8 @@ export class DesktopWorkbench {
         if ('error' in verdict) throw verdict.error
         if (verdict.value.report.status !== 'healthy') throw new Error('Window renderer failed to become healthy')
         signal.throwIfAborted()
+        this.options.onOpened?.(target, descriptor.title)
+        this.changed()
         return window
       } catch (error) {
         await window.dispose()
@@ -179,13 +219,18 @@ export class DesktopWorkbench {
     const current = this.active
     const close = { label: this.options.labels.close, accelerator: 'CmdOrCtrl+W', enabled: Boolean(current),
       click: () => { if (current) this.report(this.close(current)) } }
-    Menu.setApplicationMenu(Menu.buildFromTemplate([
-      ...(process.platform === 'darwin' ? [{ label: this.options.title, submenu: [{ role: 'about' as const }, { role: 'quit' as const }] }] : []),
-      { label: this.options.labels.menu, submenu: [open, close, { type: 'separator' }, { role: 'quit' }] },
-      { label: '编辑', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
-      { label: '窗口', submenu: [{ role: 'minimize' }, { role: 'togglefullscreen' }, { type: 'separator' }, ...windows] },
-    ]))
-    this.tray?.setContextMenu(Menu.buildFromTemplate([open, ...windows, { type: 'separator' }, { role: 'quit' }]))
+    const active = current ? this.windows.get(current) : undefined
+    const additions = active?.runtime.buildApplicationMenuItems() ?? []
+    const create = { label: this.options.labels.create ?? 'New Workspace…', accelerator: 'CmdOrCtrl+N',
+      click: () => this.report((async () => { const target = await this.options.create?.(); if (target) await this.open(target) })()) }
+    const recent = { label: this.options.labels.recent ?? 'Recent Workspaces',
+      submenu: (this.options.recent?.() ?? []).map(item => ({ label: item.title,
+        click: () => this.report(this.open(item.path)) })) }
+    const file = [...(this.options.create ? [create] : []), open, recent, { type: 'separator' as const }, close]
+    const template = macApplicationMenuTemplate(this.options.title, nativeMenuLocale(app.getPreferredSystemLanguages()),
+      additions, { file, windows })
+    Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+    this.tray?.setContextMenu(Menu.buildFromTemplate([...file, { type: 'separator' }, ...additions, ...windows, { type: 'separator' }, { role: 'quit' }]))
   }
 
   /** Install application-wide handlers exactly once, after Electron is ready. */
@@ -210,4 +255,11 @@ export class DesktopWorkbench {
     })
     this.changed()
   }
+}
+
+/** Reuse the official disposable Safe Mode environment before its launcher starts. */
+export function prepareWorkbenchSafeMode(stateDir: string): void {
+  const paths = resetDesktopSafeModeEnvironment(stateDir)
+  createDesktopWebProfile(paths.homeDir, DESKTOP_SAFE_MODE_PROFILE_NAME)
+  selectDesktopProfile(join(paths.userDataDir, 'profile-selection/state.json'), paths.homeDir, DESKTOP_SAFE_MODE_PROFILE_NAME)
 }

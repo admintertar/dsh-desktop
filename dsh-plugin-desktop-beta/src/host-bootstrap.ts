@@ -162,7 +162,6 @@ export async function bootDesktopHost(options: DesktopHostOptions, runtime: Desk
             }
           },
           persistSelection: name => {
-            if (runtime.workspaceWindows && name !== activeProfileName) throw new Error('Open another workspace window to change its Profile')
             selectDesktopProfile(selectionStatePath, homeDir, name)
           },
           requestRestart: () => runtime.requestRestart(),
@@ -191,9 +190,6 @@ export async function bootDesktopHost(options: DesktopHostOptions, runtime: Desk
           readMarket,
           readAa: () => ({ requested: currentProfilePreferences.aaEnabled === true, effective: prepared.aaEnabled }),
           selectAa: async enabled => {
-            if (runtime.workspaceWindows && enabled !== prepared.aaEnabled) {
-              throw new Error('Workspace windows use a fixed plugin composition; AA cannot be changed here')
-            }
             await enqueueProfilePreferencesWrite(current => desktopProfilePreferencesFromSettings(
               current,
               current.notifications,
@@ -220,9 +216,6 @@ export async function bootDesktopHost(options: DesktopHostOptions, runtime: Desk
             }
           },
           selectMarket: async provider => {
-            if (runtime.workspaceWindows && provider !== prepared.market.requested) {
-              throw new Error('Workspace windows use a fixed plugin composition; the market cannot be changed here')
-            }
             await enqueueProfilePreferencesWrite(current => desktopProfilePreferencesFromSettings(
               current,
               current.notifications,

@@ -26,7 +26,7 @@ export function createHostRuntime(rpc: HostRpc, snapshot: RuntimeSnapshot): Desk
   const shellSpecs = new Map<string, DesktopShellSpec>()
   const send = <T = void>(method: string, args: unknown[] = [], signal?: AbortSignal): Promise<T> => {
     const interactive = ['update:confirmDownload', 'update:showManualCheckResult', 'update:downloadAndOpen',
-      'native:pickDirectory', 'native:exportDiagnostics', 'windows:open'].includes(method)
+      'native:pickDirectory', 'native:exportDiagnostics', 'windows:open', 'windows:selectPresentation'].includes(method)
     const task = rpc.call<T>(method, args, signal, interactive ? 0 : undefined)
     calls.add(task)
     // Report fire-and-forget failures without creating an unhandled rejection.
@@ -43,6 +43,8 @@ export function createHostRuntime(rpc: HostRpc, snapshot: RuntimeSnapshot): Desk
       list: () => send<readonly { id: string; title: string; current: boolean }[]>('windows:list'),
       open: () => send('windows:open'), focus: (id: string) => send('windows:focus', [id]),
       close: () => send('windows:close'),
+      presentation: () => send<string>('windows:presentation'),
+      selectPresentation: (mode: string, directory?: string) => send('windows:selectPresentation', [mode, directory]),
     } } : {}),
     platform: snapshot.platform, windowsBuild: snapshot.windowsBuild,
     get locale() { return locale },
@@ -135,6 +137,12 @@ export function bindNativeRuntime(rpc: HostRpc, runtime: DesktopRuntime): () => 
     const windows = runtime.workspaceWindows
     handle('windows:list', () => windows.list())
     handle('windows:open', () => windows.open())
+    handle('windows:presentation', () => windows.presentation?.() ?? 'advanced')
+    handle('windows:selectPresentation', ([mode, directory]) => {
+      if (typeof mode !== 'string' || (directory !== undefined && typeof directory !== 'string')) throw new TypeError('Invalid presentation selection')
+      if (!windows.selectPresentation) throw new Error('Presentation selection is unavailable')
+      return windows.selectPresentation(mode, directory)
+    })
     handle('windows:focus', ([id]) => {
       if (typeof id !== 'string') throw new TypeError('Window identity must be a string')
       return windows.focus(id)

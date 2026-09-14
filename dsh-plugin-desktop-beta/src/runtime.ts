@@ -25,6 +25,8 @@ export interface DesktopWorkspaceWindows {
   open(): Promise<void>
   focus(id: string): Promise<void>
   close(): Promise<void>
+  presentation?(): Promise<string>
+  selectPresentation?(mode: string, directory?: string): Promise<void>
 }
 
 /** Application-owned scope for one enhanced window; no Project concepts required. */
@@ -34,6 +36,7 @@ export interface DesktopWindowScope {
   readonly title: string
   readonly windows: DesktopWorkspaceWindows
   onFocus(): void
+  onMenuChange?(): void
   requestClose(): void
 }
 

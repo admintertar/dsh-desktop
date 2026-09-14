@@ -9,6 +9,7 @@ import type {
   DesktopMarketProvider, DesktopProfileView, DesktopSettingsApi, DesktopSettingsView,
 } from './desktop-settings-api.ts'
 import type { DesktopSettingsLocaleKey } from './desktop-settings-locales.ts'
+import type { DesktopPresentationModes } from './presentation-modes.ts'
 import type { DesktopClientPlatform } from './environment.ts'
 import {
   desktopBrowserAccessAvailable,
@@ -37,6 +38,7 @@ export interface DesktopNotificationSettings {
 
 /** Registration-side business face for the Desktop settings section. */
 export interface DesktopSettingsSectionInjected {
+  readonly presentationModes?: DesktopPresentationModes
   readonly api: DesktopSettingsApi
   readonly platform: DesktopClientPlatform
   readonly initialMode: DesktopShellSettings['mode']
@@ -298,6 +300,10 @@ function marketBody(option: (typeof MARKET_OPTIONS)[number], t: Translate): Reac
   )
 }
 
+const EMPTY_PRESENTATIONS: ReturnType<DesktopPresentationModes['getSnapshot']> = []
+const emptyPresentations = () => EMPTY_PRESENTATIONS
+const noPresentationSubscription = () => () => {}
+
 /** Render the Desktop settings page. */
 export function DesktopSettingsSection({
   t,
@@ -308,7 +314,10 @@ export function DesktopSettingsSection({
   setMode: persistMode,
   desktopSettings,
   notificationSettings,
+  presentationModes,
 }: DesktopSettingsSectionProps) {
+  const extraModes = useSyncExternalStore(presentationModes?.subscribe ?? noPresentationSubscription, presentationModes?.getSnapshot ?? emptyPresentations, presentationModes?.getSnapshot ?? emptyPresentations)
+  const customActive = extraModes.some(value => value.active)
   const desktop = useScope(desktopSettings)
   const notifications = useScope(notificationSettings)
   const [view, setView] = useState<DesktopSettingsView>()
@@ -443,7 +452,7 @@ export function DesktopSettingsSection({
   const setMode = (next: DesktopShellSettings['mode']): void => {
     void run('mode', async () => {
       await persistMode(next)
-      requestRestart()
+      if (!customActive) requestRestart()
     })
   }
 
@@ -661,27 +670,31 @@ export function DesktopSettingsSection({
           <Choice
             title={t('compatibilityMode')}
             body={t('compatibilityModeBody')}
-            selected={mode === 'compatibility'}
+            selected={!customActive && mode === 'compatibility'}
             disabled={!settingsWritable || busy !== undefined || restart !== 'none'}
             action={() => { setMode('compatibility') }}
-            status={mode === 'compatibility' ? t('selected') : undefined}
+            status={!customActive && mode === 'compatibility' ? t('selected') : undefined}
           />
           <Choice
             title={t('extendedMode')}
             body={platform === 'linux' ? t('extendedUnavailableLinux') : t('extendedModeBody')}
-            selected={mode === 'extended'}
+            selected={!customActive && mode === 'extended'}
             disabled={platform === 'linux' || !settingsWritable || busy !== undefined || restart !== 'none'}
             action={() => { setMode('extended') }}
-            status={mode === 'extended' ? t('selected') : undefined}
+            status={!customActive && mode === 'extended' ? t('selected') : undefined}
           />
           <Choice
             title={t('advancedMode')}
             body={platform === 'linux' ? t('advancedUnavailableLinux') : t('advancedModeBody')}
-            selected={mode === 'advanced'}
+            selected={!customActive && mode === 'advanced'}
             disabled={platform === 'linux' || !settingsWritable || busy !== undefined || restart !== 'none'}
             action={() => { setMode('advanced') }}
-            status={mode === 'advanced' ? t('selected') : undefined}
+            status={!customActive && mode === 'advanced' ? t('selected') : undefined}
           />
+          {extraModes.map(option => <Choice key={option.id} title={option.title} body={option.description}
+            selected={option.active} disabled={busy !== undefined || restart !== 'none'}
+            action={() => { void run('mode', async () => { await option.select() }) }}
+            status={option.active ? t('selected') : undefined} />)}
         </div>
         {platform !== 'linux' && (
           <label className="dshDesktopSettingsMaterialField">

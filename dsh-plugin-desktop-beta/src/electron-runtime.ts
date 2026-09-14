@@ -197,7 +197,6 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
 
   /** @inheritdoc */
   schedule(spec: DesktopShellSpec): () => Promise<void> {
-    if (this.windowScope && spec.mode !== 'advanced') throw new Error('Scoped windows require the enhanced shell')
     if (this.scheduled !== undefined || this.mountTask !== undefined) {
       throw new Error('dsh-plugin-desktop: a native shell generation is already registered')
     }
@@ -434,7 +433,7 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
         noLink: true,
       })
       if (confirmation.response !== 0) return
-      const path = await exportDesktopDiagnostics(app.getPath('userData'), {
+      const path = await exportDesktopDiagnostics(this.windowScope?.stateDir ?? app.getPath('userData'), {
         appVersion: PRODUCT_VERSION,
         crashDumpsDir: app.getPath('crashDumps'),
       })
@@ -920,12 +919,12 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
 
   /** Rebuild the macOS application menu from the same native, Host-owned commands as the tray. */
   private rebuildApplicationMenu(): void {
-    if (this.windowScope) return
+    if (this.windowScope) { this.windowScope.onMenuChange?.(); return }
     this.platformStrategy.refreshApplicationMenu(this.buildApplicationMenuItems())
   }
 
   /** Keep the app menu renderer-free by reusing trusted native tray contributions. */
-  private buildApplicationMenuItems(): Electron.MenuItemConstructorOptions[] {
+  buildApplicationMenuItems(): Electron.MenuItemConstructorOptions[] {
     const tools = this.contributedTrayItems('tools')
     const profiles = this.contributedTrayItems('profiles')
     const items: Electron.MenuItemConstructorOptions[] = []

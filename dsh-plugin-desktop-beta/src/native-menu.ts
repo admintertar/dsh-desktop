@@ -123,6 +123,7 @@ export function macApplicationMenuTemplate(
   appName: string,
   locale: NativeMenuLocale,
   additions: readonly MenuItemConstructorOptions[] = [],
+  extension: { file?: readonly MenuItemConstructorOptions[]; windows?: readonly MenuItemConstructorOptions[] } = {},
 ): MenuItemConstructorOptions[] {
   const label = LABELS[locale]
   const nativeAdditions = additions.length === 0
@@ -145,7 +146,7 @@ export function macApplicationMenuTemplate(
     },
     {
       label: label.file,
-      submenu: [{ label: label.closeWindow, role: 'close' }],
+      submenu: extension.file ? [...extension.file] : [{ label: label.closeWindow, role: 'close' }],
     },
     {
       label: label.edit,
@@ -182,6 +183,7 @@ export function macApplicationMenuTemplate(
         { label: label.windowZoom, role: 'zoom' },
         { type: 'separator' },
         { label: label.windowFront, role: 'front' },
+        ...(extension.windows?.length ? [{ type: 'separator' as const }, ...extension.windows] : []),
       ],
     },
   ]

@@ -266,7 +266,6 @@ export class ElectronShellGeneration {
     const isolated = spec.mode !== 'advanced' && platform.platform !== 'linux'
     const windowOptions = desktopWindowOptions(spec, icon, platform.platform, this.options.preloadPath)
     if (this.options.scope) {
-      if (spec.mode !== 'advanced') throw new Error('Scoped windows require the enhanced shell')
       windowOptions.webPreferences = { ...windowOptions.webPreferences, partition: this.options.scope.partition }
       windowOptions.title = this.options.scope.title
     }
@@ -277,7 +276,7 @@ export class ElectronShellGeneration {
         nodeIntegration: false,
         sandbox: true,
         webSecurity: true,
-        partition: 'dsh-desktop-compatibility-host',
+        partition: this.options.scope ? `${this.options.scope.partition}-host` : 'dsh-desktop-compatibility-host',
       } } : {}),
       ...(restoredBounds ?? {}),
     })
@@ -291,7 +290,7 @@ export class ElectronShellGeneration {
     this.window = window
     try {
       if (isolated) {
-        this.compatibilityShell = new CompatibilityShell(window, spec, platform.platform, this.options.preloadPath, this.options.chromeActions)
+        this.compatibilityShell = new CompatibilityShell(window, spec, platform.platform, this.options.preloadPath, this.options.chromeActions, this.options.scope?.partition)
       }
     } catch (cause) {
       await this.release()

@@ -71,4 +71,13 @@ describe('native macOS application menu', () => {
     ]))
     expect(submenu(template[0]!).filter(item => item.type === 'separator')).toHaveLength(4)
   })
+  it('extends only the File menu while preserving all enhanced menu roles and commands', () => {
+    const terminal = { label: 'Open DSH Terminal', click: vi.fn() }
+    const base = macApplicationMenuTemplate('DSH Desktop', 'zh-CN', [terminal])
+    const file = ['新建项目…', '打开项目…', '最近项目', '关闭项目'].map(label => ({ label, click: vi.fn() }))
+    const extended = macApplicationMenuTemplate('DSH Desktop', 'zh-CN', [terminal], { file })
+    expect(extended[1]?.submenu).toEqual(file)
+    for (const index of [0, 2, 3, 4]) expect(extended[index]).toEqual(base[index])
+  })
+
 })

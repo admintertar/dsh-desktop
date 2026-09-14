@@ -144,7 +144,7 @@ const electron = vi.hoisted(() => {
     readonly setBounds = vi.fn()
     readonly setBackgroundColor = vi.fn()
     constructor(readonly options: unknown) {
-      this.webContents = (options as { webPreferences: { partition: string } }).webPreferences.partition === 'dsh-desktop-compatibility-chrome'
+      this.webContents = (options as { webPreferences: { partition: string } }).webPreferences.partition.endsWith('-chrome')
         ? chromeWebContents : webContents
       contentViews.push(this)
     }
@@ -162,7 +162,7 @@ const electron = vi.hoisted(() => {
     accessibleTitle = ''
 
     constructor(options: unknown) {
-      this.webContents = (options as { webPreferences?: { partition?: string } }).webPreferences?.partition === 'dsh-desktop-compatibility-host'
+      this.webContents = (options as { webPreferences?: { partition?: string } }).webPreferences?.partition?.endsWith('-host')
         ? chromeWebContents : webContents
       browserWindowOptions.push(options)
       browserWindowThemeSources.push(nativeTheme.themeSource)
@@ -395,7 +395,7 @@ describe('Electron desktop runtime', () => {
     vi.restoreAllMocks()
   })
 
-  it('mounts independent enhanced windows while leaving app menu, tray and activation to the workbench', async () => {
+  it.each(['advanced', 'extended', 'compatibility'] as const)('mounts independent %s windows while leaving the app menu and tray to the workbench', async mode => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
     const { ElectronDesktopRuntime } = await import('../src/electron-runtime.ts')
     const create = (id: string) => {
@@ -406,15 +406,19 @@ describe('Electron desktop runtime', () => {
           onFocus: vi.fn(), requestClose: close,
           windows: { list: async () => [], open: async () => {}, focus: async () => {}, close: async () => {} },
         })
-      return { runtime, close, dispose: runtime.schedule({ ...spec, mode: 'advanced' }) }
+      return { runtime, close, dispose: runtime.schedule({ ...spec, mode }) }
     }
     const a = create('a'), b = create('b')
     await a.runtime.mountScheduled()
     await b.runtime.mountScheduled()
     expect(electron.browserWindowOptions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ title: 'a', webPreferences: expect.objectContaining({ partition: 'persist:workspace-a' }) }),
-      expect.objectContaining({ title: 'b', webPreferences: expect.objectContaining({ partition: 'persist:workspace-b' }) }),
+      expect.objectContaining({ title: 'a', webPreferences: expect.objectContaining({ partition: mode === 'advanced' ? 'persist:workspace-a' : 'persist:workspace-a-host' }) }),
+      expect.objectContaining({ title: 'b', webPreferences: expect.objectContaining({ partition: mode === 'advanced' ? 'persist:workspace-b' : 'persist:workspace-b-host' }) }),
     ]))
+    if (mode !== 'advanced') {
+      const partitions = electron.contentViews.map(view => (view.options as {webPreferences: {partition: string}}).webPreferences.partition)
+      expect(partitions).toEqual(['persist:workspace-a-chrome', 'persist:workspace-a', 'persist:workspace-b-chrome', 'persist:workspace-b'])
+    }
     expect(electron.trays).toHaveLength(0)
     expect(electron.Menu.setApplicationMenu).not.toHaveBeenCalled()
     expect(electron.app.on.mock.calls.some(([event]) => event === 'activate')).toBe(false)

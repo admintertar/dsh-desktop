@@ -8,6 +8,7 @@ import { DesktopTerminalSettingsAction } from './DesktopTerminalSettingsAction.t
 import { createDesktopSettingsApi } from './desktop-settings-api.ts'
 import { en, zh, type DesktopSettingsLocaleKey } from './desktop-settings-locales.ts'
 import { installDesktopSettingsStyles } from './desktop-settings-styles.ts'
+import { DesktopPresentationModes } from './presentation-modes.ts'
 import type { DesktopClientEnvironment } from './environment.ts'
 
 /** Locale namespace owned by the Desktop settings page. */
@@ -64,9 +65,13 @@ export function applyDesktopSettings(
   const notificationSettings = ctx.settingsScope.bind<DesktopNotificationSettings>({
     namespace: DESKTOP_NOTIFICATIONS_SETTINGS_NAMESPACE,
   })
+  const presentationModes = new DesktopPresentationModes()
+  ctx.provide('desktopPresentationModes', presentationModes)
   const api = createDesktopSettingsApi()
   const t = ctx.locale.bind(DESKTOP_SETTINGS_LOCALE_NAMESPACE)
   const setMode = async (mode: DesktopShellSettings['mode']): Promise<void> => {
+    const active = presentationModes.getSnapshot().find(value => value.active)
+    if (active) return await active.leave(mode)
     await persistDesktopModeSelection(desktopSettings, mode)
   }
 
@@ -92,6 +97,7 @@ export function applyDesktopSettings(
       setMode,
       desktopSettings,
       notificationSettings,
+      presentationModes,
     }),
   }, DesktopSettingsSection))
   ctx.slots.inject('settings.action', () => ctx.slots.register({
