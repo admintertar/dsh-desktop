@@ -157,6 +157,10 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
   }
 
   get workspaceWindows() { return this.windowScope?.windows }
+  get sharedTheme() { return this.windowScope?.theme }
+
+  /** Workbench owns nativeTheme; refresh this window without restoring a Profile-local preference. */
+  refreshSharedThemeMaterial(): void { this.generation?.refreshThemeMaterial() }
 
   /** Log an Electron-scope error to the sink, falling back to stderr without a logger. */
   private logError(message: string): void {

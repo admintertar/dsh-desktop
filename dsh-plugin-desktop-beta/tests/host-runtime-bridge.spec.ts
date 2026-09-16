@@ -4,6 +4,30 @@ import { HostRpc } from '../src/host-rpc.ts'
 import { bindNativeRuntime, createHostRuntime, runtimeSnapshot } from '../src/host-runtime-bridge.ts'
 import type { DesktopRuntime, DesktopShellSpec, DesktopTrayItem } from '../src/runtime.ts'
 
+it('carries shared theme handshakes, selections and cleanup over the existing Host RPC', async () => {
+  const {port1, port2} = new MessageChannel()
+  const [parent, child] = [port1, port2].map(port => new HostRpc({send: value => port.postMessage(value),
+    listen: receive => {port.on('message', receive); return () => {port.off('message', receive)}}})) as [HostRpc, HostRpc]
+  let apply!: (source: 'light' | 'dark' | 'system') => Promise<void>
+  const disconnect = vi.fn()
+  const native = {platform: 'darwin', locale: 'en', updates: {}, sharedTheme: {
+    connect: vi.fn(async (_initial, callback) => {apply = callback; await apply('dark'); return disconnect}),
+    select: vi.fn(async source => {await apply(source)}),
+  }} as unknown as DesktopRuntime
+  const release = bindNativeRuntime(parent, native)
+  try {
+    const runtime = createHostRuntime(child, runtimeSnapshot(native)), receive = vi.fn(async () => {})
+    const stop = await runtime.sharedTheme!.connect('light', receive)
+    expect(receive).toHaveBeenCalledWith('dark')
+    await runtime.sharedTheme!.select('system')
+    expect(receive).toHaveBeenLastCalledWith('system')
+    await expect(child.call('theme:select', ['bad'])).rejects.toThrow('theme')
+    expect(native.sharedTheme!.select).toHaveBeenCalledTimes(1)
+    await stop()
+    expect(disconnect).toHaveBeenCalledOnce()
+  } finally {await release(); parent.close(); child.close(); port1.close(); port2.close()}
+})
+
 it('preserves the Web URL and authentication while projecting shell and tray callbacks', async () => {
   const { port1, port2 } = new MessageChannel()
   const [parent, child] = [port1, port2].map(port => new HostRpc({

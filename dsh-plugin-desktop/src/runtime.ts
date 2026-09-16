@@ -19,6 +19,12 @@ export type DesktopShellMode = 'compatibility' | 'extended' | 'advanced'
 /** Electron appearance source used by native frame and material rendering. */
 export type DesktopThemeSource = 'system' | 'light' | 'dark'
 
+/** Optional application-wide preference, synchronized through each Host's official settings service. */
+export interface DesktopSharedTheme {
+  connect(initial: DesktopThemeSource, apply: (source: DesktopThemeSource) => Promise<void>): Promise<() => void | Promise<void>>
+  select(source: DesktopThemeSource): Promise<void>
+}
+
 /** Window capabilities granted by a multi-window application to one Host. */
 export interface DesktopWorkspaceWindows {
   list(): Promise<readonly { id: string; title: string; current: boolean }[]>
@@ -35,6 +41,7 @@ export interface DesktopWindowScope {
   readonly stateDir: string
   readonly title: string
   readonly windows: DesktopWorkspaceWindows
+  readonly theme?: DesktopSharedTheme
   onFocus(): void
   onMenuChange?(): void
   requestClose(): void
@@ -190,6 +197,7 @@ export interface DesktopShellSpec extends DesktopWindowConfig {
 /** Electron bootstrap capability supplied before the profile tree mounts. */
 export interface DesktopRuntime {
   readonly workspaceWindows?: DesktopWorkspaceWindows | undefined
+  readonly sharedTheme?: DesktopSharedTheme | undefined
   /** Current Electron platform. */
   readonly platform: DesktopPlatform
 

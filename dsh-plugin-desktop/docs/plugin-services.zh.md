@@ -324,6 +324,10 @@ yarn workspace dsh-plugin-desktop verify:profile
 
 内置 `dshmarket` runtime 使用 `runPlugin()` 执行普通插件命令，并使用 `runExternalMarketPluginInstall()` 执行精确 npm add。后者会在跨越 service 前解析版本，并拒绝非精确或多 target 请求。两种操作都会使用当前 Desktop Profile 与已打包 DSH CLI；都不会创建安装 transaction、快照、receipt、自动回滚或恢复提示。
 
+## Workbench 共享主题
+
+可选 Workbench 启动器在应用 userData 的 `workbench-theme/state.json` 中保存统一的 `light` / `dark` / `system` 偏好。内部可选能力 `desktopRuntime.sharedTheme` 在 Renderer 挂载前通过各 Host 的官方 settings 服务同步 `ui-theme.preference`，并通过 `nativeTheme.themeSource` 更新原生材质。共享值不存在时由第一个接入的 Host 初始化；后续 Host、Profile 切换及项目恢复均继承它，关闭项目不还原先前的原生主题。字体大小和其他 Profile 设置仍独立，原版独立 Desktop 启动行为不变。插件应使用官方外观控件，不直接调用此启动器私有能力或添加自定义侧栏底色。
+
 ## 稳定性边界
 
 受支持的插件作者 surface，是本文描述且由 `dsh-plugin-desktop/profile-service`、`dsh-plugin-desktop/pnpm` 与 `dsh-plugin-desktop/client` 导出的 `desktopProfiles`、`desktopPnpm` 和 `desktopWindow` service contract。Launcher bootstrap 值、native adapter、生成 shim、状态文件格式、Loader row 顺序与 Electron 实现细节都可能变化，但不会因此成为第三方 API。Fallback 必须保持显式、限定在生命周期内，并且 headless-safe。

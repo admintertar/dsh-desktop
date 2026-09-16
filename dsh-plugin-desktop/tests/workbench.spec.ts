@@ -3,7 +3,8 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 const state = vi.hoisted(() => ({ runtimes: [] as any[], menu: vi.fn(), errors: vi.fn(), healthy: true,
   hostStops: [] as ReturnType<typeof vi.fn>[], stopFails: false, beforeHealth: undefined as (() => Promise<void>) | undefined }))
 vi.mock('electron', () => ({
-  app: { getPreferredSystemLanguages: () => ['zh-CN'] },
+  app: { getPreferredSystemLanguages: () => ['zh-CN'], getPath: () => '/unused-workbench-test' },
+  nativeTheme: {themeSource: 'system'},
   dialog: { showErrorBox: (...args: unknown[]) => state.errors(...args) },
   Menu: { buildFromTemplate: (value: unknown) => value, setApplicationMenu: (...args: unknown[]) => state.menu(...args) },
   nativeImage: {}, Tray: class {},
@@ -18,6 +19,7 @@ vi.mock('../src/electron-runtime.ts', () => ({ desktopProductVersion: () => '2.0
   show = vi.fn()
   prepareToQuit = vi.fn()
   mountScheduled = vi.fn()
+  refreshSharedThemeMaterial = vi.fn()
   beginRendererBootMonitoring = async (options: {commitHealthy(): Promise<void>}) => {
     await state.beforeHealth?.()
     if (state.healthy) await options.commitHealthy()
@@ -47,6 +49,26 @@ beforeEach(() => { state.runtimes.length = 0; state.errors.mockClear(); state.me
   state.hostStops.length = 0; state.stopFails = false; state.beforeHealth = undefined })
 
 describe('workspace application composition', () => {
+  it('gives all project windows the same persisted theme and refreshes native materials', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'workbench-theme-windows-'))
+    const launch = makeLaunch(root)
+    const bench = new DesktopWorkbench({title: 'Test', themeStatePath: join(root, 'shared/state.json'),
+      labels: {open: 'Open', close: 'Close'}, pick: async () => undefined,
+      resolve: async id => ({id, title: id, prepare: async () => launch})})
+    try {
+      await bench.open('a'); await bench.open('b')
+      const [a, b] = state.runtimes
+      expect(a.scope.theme).toBe(b.scope.theme)
+      const stopA = await a.scope.theme.connect('dark', vi.fn())
+      const stopB = await b.scope.theme.connect('light', vi.fn())
+      await a.scope.theme.select('light')
+      const {nativeTheme} = await import('electron')
+      expect(nativeTheme.themeSource).toBe('light')
+      expect(a.refreshSharedThemeMaterial).toHaveBeenCalled()
+      expect(b.refreshSharedThemeMaterial).toHaveBeenCalled()
+      await stopA(); await stopB()
+    } finally {await bench.close('a'); await bench.close('b'); rmSync(root, {recursive: true, force: true})}
+  })
   it('reserves a project through preparation failure, recovery and retry', async () => {
     const root = mkdtempSync(join(tmpdir(), 'workbench-recover-'))
     const launch = makeLaunch(root)

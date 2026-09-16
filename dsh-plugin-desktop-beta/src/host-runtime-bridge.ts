@@ -1,15 +1,18 @@
 /** Native capability adapters; frontend HTTP and WebSocket connections are unchanged. */
 import type { DesktopRuntime, DesktopShellSpec, DesktopTrayItem, DesktopTrayItemRegistration, DesktopUpdateAdapter } from './runtime.ts'
 import { HostRpc } from './host-rpc.ts'
+import { assertDesktopThemeSource } from './workbench-theme.ts'
 
 export type RuntimeSnapshot = Pick<DesktopRuntime, 'platform' | 'windowsBuild' | 'locale'> & {
   workspaceWindows?: boolean
+  sharedTheme?: boolean
   updates: Omit<DesktopUpdateAdapter, 'request' | 'confirmDownload' | 'showManualCheckResult' | 'downloadAndOpen' | 'notify'>
 }
 export function runtimeSnapshot(runtime: DesktopRuntime): RuntimeSnapshot {
   const { isPackaged, canDownload, currentVersion, releaseChannel, statePath, installationId } = runtime.updates
   return { platform: runtime.platform, windowsBuild: runtime.windowsBuild, locale: runtime.locale,
     ...(runtime.workspaceWindows ? { workspaceWindows: true } : {}),
+    ...(runtime.sharedTheme ? { sharedTheme: true } : {}),
     updates: { isPackaged, canDownload, currentVersion, statePath,
       ...(releaseChannel ? { releaseChannel } : {}), ...(installationId ? { installationId } : {}) } }
 }
@@ -39,6 +42,15 @@ export function createHostRuntime(rpc: HostRpc, snapshot: RuntimeSnapshot): Desk
     return { id, release: () => releases.forEach(dispose => dispose()) }
   }
   const runtime: DesktopRuntime = {
+    ...(snapshot.sharedTheme ? {sharedTheme: {
+      async connect(initial, apply) {
+        const binding = callbacks({apply: source => {assertDesktopThemeSource(source); return apply(source)}})
+        try { await send('theme:connect', [binding.id, initial]) }
+        catch (error) {binding.release(); throw error}
+        return async () => {try {await send('theme:disconnect', [binding.id])} finally {binding.release()}}
+      },
+      select: source => send('theme:select', [source]),
+    } satisfies NonNullable<DesktopRuntime['sharedTheme']>} : {}),
     ...(snapshot.workspaceWindows ? { workspaceWindows: {
       list: () => send<readonly { id: string; title: string; current: boolean }[]>('windows:list'),
       open: () => send('windows:open'), focus: (id: string) => send('windows:focus', [id]),
@@ -129,10 +141,24 @@ export function bindNativeRuntime(rpc: HostRpc, runtime: DesktopRuntime): () => 
   const trays = new Map<string, DesktopTrayItemRegistration>()
   const shells = new Map<string, () => Promise<void>>()
   const preferences = new Map<string, { locale: any; theme: any }>()
+  const themes = new Map<string, () => void | Promise<void>>()
+  let disposed = false
   const releases: (() => void)[] = []
   const handle = (name: string, fn: (args: any[], signal: AbortSignal) => unknown) => { releases.push(rpc.handle(name, fn)) }
   const callback = (method: string, args: unknown[] = []) => rpc.call(method, args)
   const report = (promise: Promise<unknown>) => { void promise.catch(error => process.stderr.write(`${String(error)}\n`)) }
+  if (runtime.sharedTheme) {
+    const theme = runtime.sharedTheme
+    handle('theme:connect', async ([id, initial]) => {
+      if (typeof id !== 'string' || themes.has(id)) throw new TypeError('Invalid theme connection')
+      assertDesktopThemeSource(initial)
+      const disconnect = await theme.connect(initial, source => callback(`${id}:apply`, [source]))
+      if (disposed) {await disconnect(); throw new Error('Host theme connection is closed')}
+      themes.set(id, disconnect)
+    })
+    handle('theme:select', ([source]) => {assertDesktopThemeSource(source); return theme.select(source)})
+    handle('theme:disconnect', async ([id]) => {const disconnect = themes.get(id); themes.delete(id); await disconnect?.()})
+  }
   if (runtime.workspaceWindows) {
     const windows = runtime.workspaceWindows
     handle('windows:list', () => windows.list())
@@ -198,6 +224,8 @@ export function bindNativeRuntime(rpc: HostRpc, runtime: DesktopRuntime): () => 
   handle('update:downloadAndOpen', ([version, channel], signal) => runtime.updates.downloadAndOpen(version, signal, channel))
   handle('update:notify', ([value]) => runtime.updates.notify(value))
   return async () => {
+    disposed = true
+    await Promise.all([...themes.values()].map(disconnect => disconnect())); themes.clear()
     trays.forEach(tray => tray.dispose()); trays.clear()
     await Promise.all([...shells.values()].map(dispose => dispose())); shells.clear(); preferences.clear()
     releases.forEach(release => release())

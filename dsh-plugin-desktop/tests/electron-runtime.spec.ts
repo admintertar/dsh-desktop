@@ -398,19 +398,26 @@ describe('Electron desktop runtime', () => {
   it.each(['advanced', 'extended', 'compatibility'] as const)('mounts independent %s windows while leaving the app menu and tray to the workbench', async mode => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
     const { ElectronDesktopRuntime } = await import('../src/electron-runtime.ts')
+    const theme = {connect: vi.fn(), select: vi.fn()}
+    electron.nativeTheme.themeSource = 'dark'
     const create = (id: string) => {
       const close = vi.fn()
       const runtime = new ElectronDesktopRuntime(async () => {}, () => {}, undefined, undefined,
         { read: () => undefined, write: () => {} }, undefined, {
-          partition: `persist:workspace-${id}`, title: id, stateDir: `/tmp/workspace-${id}`,
+          partition: `persist:workspace-${id}`, title: id, stateDir: `/tmp/workspace-${id}`, theme,
           onFocus: vi.fn(), requestClose: close,
           windows: { list: async () => [], open: async () => {}, focus: async () => {}, close: async () => {} },
         })
-      return { runtime, close, dispose: runtime.schedule({ ...spec, mode }) }
+      return { runtime, close, dispose: runtime.schedule({ ...spec, mode, readThemeSource: () => 'light' }) }
     }
     const a = create('a'), b = create('b')
     await a.runtime.mountScheduled()
     await b.runtime.mountScheduled()
+    expect(a.runtime.sharedTheme).toBe(theme)
+    expect(b.runtime.sharedTheme).toBe(theme)
+    expect(electron.nativeTheme.themeSource).toBe('dark')
+    a.runtime.setThemeSource('light')
+    expect(electron.nativeTheme.themeSource).toBe('dark')
     expect(electron.browserWindowOptions).toEqual(expect.arrayContaining([
       expect.objectContaining({ title: 'a', webPreferences: expect.objectContaining({ partition: mode === 'advanced' ? 'persist:workspace-a' : 'persist:workspace-a-host' }) }),
       expect.objectContaining({ title: 'b', webPreferences: expect.objectContaining({ partition: mode === 'advanced' ? 'persist:workspace-b' : 'persist:workspace-b-host' }) }),
@@ -426,11 +433,15 @@ describe('Electron desktop runtime', () => {
     closeHandler({ preventDefault: vi.fn() })
     expect(a.close).toHaveBeenCalledOnce()
     expect(b.close).not.toHaveBeenCalled()
+    // Only the Workbench changes nativeTheme; closing a scope never restores its old value.
+    electron.nativeTheme.themeSource = 'light'
     a.runtime.prepareToQuit()
     await a.dispose()
+    expect(electron.nativeTheme.themeSource).toBe('light')
     expect(electron.browserWindows[1]?.destroy).not.toHaveBeenCalled()
     b.runtime.prepareToQuit()
     await b.dispose()
+    expect(electron.nativeTheme.themeSource).toBe('light')
   })
 
   it('uses the independent macOS compatibility frame, Dock icon, and template tray image', async () => {

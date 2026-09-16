@@ -1,5 +1,5 @@
 /** Opt-in multi-window application. The ordinary Desktop launcher is unchanged. */
-import { app, dialog, Menu, nativeImage, Tray } from 'electron'
+import { app, dialog, Menu, nativeImage, nativeTheme, Tray } from 'electron'
 import { createHash } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -23,6 +23,7 @@ import { desktopTrayLabel } from './tray-locale.ts'
 import { resetDesktopSafeModeEnvironment, DESKTOP_SAFE_MODE_PROFILE_NAME } from './safe-mode.ts'
 import { createDesktopWebProfile, selectDesktopProfile } from './profile-manager.ts'
 import { prepareTrayIcon } from './tray-icons.ts'
+import { WorkbenchTheme } from './workbench-theme.ts'
 import type { PreparedDesktopProfile } from './profile.ts'
 import type { DesktopStartupGenerationHost } from './startup-generation.ts'
 import type { DesktopLocale } from './runtime.ts'
@@ -50,6 +51,8 @@ export interface DesktopWorkbenchTarget {
 }
 export interface DesktopWorkbenchOptions {
   title: string
+  /** Defaults to the shared Workbench application's userData, never a project's Home. */
+  themeStatePath?: string
   labels: { open: string; close: string; create?: string; recent?: string } | ((locale: DesktopLocale) => { open: string; close: string; create?: string; recent?: string })
   resolve(target: string): Promise<DesktopWorkbenchTarget>
   pick(): Promise<string | undefined>
@@ -82,8 +85,16 @@ export class DesktopWorkbench {
   private started = false
   private quitTask: Promise<void> | undefined
   private picker: Promise<void> | undefined
+  private theme?: WorkbenchTheme
 
   constructor(private readonly options: DesktopWorkbenchOptions) {}
+
+  private sharedTheme(): WorkbenchTheme {
+    return this.theme ??= new WorkbenchTheme(this.options.themeStatePath ?? join(app.getPath('userData'), 'workbench-theme/state.json'), source => {
+      if (process.platform !== 'linux') nativeTheme.themeSource = source
+      for (const window of this.windows.values()) window.runtime.refreshSharedThemeMaterial()
+    })
+  }
 
   async open(target: string): Promise<void> {
     await this.openTarget(target)
@@ -138,6 +149,8 @@ export class DesktopWorkbench {
     if (launch.prepared.openBrowser || launch.prepared.networkExposure !== 'loopback') {
       throw new Error('Workbench windows require local-only access')
     }
+    // Validate shared state before allocating any per-window native resources.
+    const theme = this.sharedTheme()
     const environment = { ...launch.environment, DSH_HOME: launch.homeDir,
       DSH_AGENTS_HOME: join(launch.homeDir, 'agents') }
     delete (environment as NodeJS.ProcessEnv).ELECTRON_RUN_AS_NODE
@@ -157,6 +170,7 @@ export class DesktopWorkbench {
       return true
     }, undefined, undefined, new FileMainWindowStateStore(launch.stateDir), undefined, {
       title: descriptor.title, stateDir: launch.stateDir,
+      theme,
       partition: `persist:dsh-workbench-${createHash('sha256').update(id).digest('hex')}`,
       onFocus: () => { this.active = id; this.changed() },
       onMenuChange: () => this.changed(),

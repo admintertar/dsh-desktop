@@ -23,6 +23,7 @@ import type { DesktopRuntime } from './runtime.ts'
 import type { DesktopStartupGenerationHost } from './startup-generation.ts'
 import { FileExporter } from './file-exporter.ts'
 import { LogFileSink } from './log-files.ts'
+import { connectWorkbenchThemeSettings } from './workbench-theme-settings.ts'
 
 function desktopProfileMarketSnapshot(market: DesktopMarketProvider): DesktopMarketSnapshot {
   return Object.freeze({
@@ -254,6 +255,11 @@ export async function bootDesktopHost(options: DesktopHostOptions, runtime: Desk
       throw cause
     })
     bindHost(ctx)
+    // Complete shared-theme reconciliation before the parent mounts a Renderer.
+    if (runtime.sharedTheme) {
+      const releaseTheme = await connectWorkbenchThemeSettings(ctx, runtime.sharedTheme)
+      ctx.effect(() => releaseTheme, 'desktop: shared Workbench theme')
+    }
     fileExporter?.setThreshold((ctx.settings.get(DESKTOP_SETTINGS_NAMESPACE) as DesktopSettings | undefined)?.logLevel ?? 'info')
     ctx.on('settings/updated', (namespace, next) => {
       if (namespace === DESKTOP_SETTINGS_NAMESPACE) {
