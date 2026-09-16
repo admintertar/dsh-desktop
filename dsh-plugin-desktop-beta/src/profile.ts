@@ -1036,8 +1036,7 @@ export function prepareDesktopProfile(
     }
     patches.push(
       { id: 'ui-layout', disabled: true },
-      // Profiles may disable this occupant and insert their own sidebar plugin.
-      { id: 'ui-sidebar', disabled: rows.get('ui-sidebar')?.disabled ?? false },
+      { id: 'ui-sidebar', disabled: false },
       { id: 'ui-conversation', disabled: false },
     )
   }

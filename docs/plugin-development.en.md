@@ -184,22 +184,6 @@ desktopPnpm.runPlugin(['install', '--no-frozen-lockfile'], invokingDir, signal)
 
 Arguments are passed as argv. Do not concatenate shell strings or depend on Windows `.cmd` shims. The service settles only after the whole subprocess tree exits and terminates active operations during generation disposal.
 
-## Replacing the sidebar in custom shell modes
-
-Advanced and extended modes respect a profile's explicit disabling of the official `ui-sidebar` row. A profile can disable that row and insert a third-party Client plugin supplying the sidebar while Desktop retains its own root layout and the official conversation. The replacement registers the standard `sidebar` slot, handles its `collapsed` and `width` owner props, and declares any child slots it retains, such as settings. The unchanged official sidebar keeps its existing activation behavior; compatibility-mode composition is unchanged.
-
-```yaml
-- id: ui-sidebar
-  disabled: true
-- insert:
-    - id: project-sidebar
-      name: example-project-sidebar
-      config:
-        project: project-a
-```
-
-The plugin loads through ordinary `dsh.client` metadata and a `./client` artifact. This entry replaces only the sidebar occupant; it does not expose native-window or multiple-Host management.
-
 ## APIs not to depend on
 
 `desktopRuntime`, `desktopPnpmBootstrap`, Electron `BrowserWindow`, the tray registry, private Node helpers, `ELECTRON_RUN_AS_NODE`, and generated shims are Desktop internals. Their presence in declarations or runtime context does not make them third-party compatibility contracts.

@@ -878,30 +878,6 @@ virtualStoreDirMaxLength: 60
     }))
   })
 
-  it.each(['advanced', 'extended'] as const)('allows a profile to replace the sidebar in %s mode', (mode) => {
-    const home = temporaryHome()
-    const profile = ensureDesktopProfile(home)
-    writeFileSync(join(home, 'settings.yaml'), `dsh-desktop:\n  mode: ${mode}\n`)
-    writeFileSync(join(profile, 'cordis.patch.yml'), [
-      '- id: ui-sidebar',
-      '  disabled: true',
-      '- insert:',
-      '    - id: project-sidebar',
-      '      name: example-project-sidebar',
-      '      config:',
-      '        project: project-a',
-      '',
-    ].join('\n'))
-
-    const rows = composeEntries([prepareDesktopProfile(undefined, home, 'darwin').patches])
-    expect(rows.find(row => row.id === 'ui-sidebar')?.disabled).toBe(true)
-    expect(rows.find(row => row.id === 'project-sidebar')).toEqual(expect.objectContaining({
-      name: 'example-project-sidebar', config: { project: 'project-a' },
-    }))
-    expect(rows.find(row => row.id === 'ui-layout')?.disabled).toBe(true)
-    expect(rows.find(row => row.id === 'ui-conversation')?.disabled).toBe(false)
-  })
-
   it('reads JSON settings and defaults an absent desktop namespace to compatibility', () => {
     const home = temporaryHome()
     const path = join(home, 'desktop-settings.json')
