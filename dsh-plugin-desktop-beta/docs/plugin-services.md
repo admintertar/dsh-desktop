@@ -325,6 +325,10 @@ This fixture is under `tests/`, is absent from the npm `files` list and Electron
 
 The bundled `dshmarket` runtime consumes `runPlugin()` for ordinary plugin commands and `runExternalMarketPluginInstall()` for an exact npm add. The latter resolves the version before it crosses the service and rejects non-exact or multi-target requests. Both operations use the active Desktop Profile and the packaged DSH CLI; neither creates an install transaction, snapshot, receipt, automatic rollback, or recovery prompt.
 
+## Workbench checkpoint recovery
+
+The opt-in `./workbench` launcher records the same three-slot Profile checkpoints after each healthy project-window startup. A target may provide `recovery` paths before preparation, allowing configuration errors to enter the ordinary Desktop recovery process. Its `recover(mode, environment, signal, failureDetail)` callback must wait for that process to exit and return `restart` or `cancelled`. Workbench reserves the project throughout teardown, maintenance and retry; an unconfirmed Host teardown blocks recovery. Other project Hosts remain running. The supervised maintenance exit protocol is exported from `./workbench`; it replaces only the child application's native relaunch and leaves ordinary Desktop launches unchanged. A Workbench recovery keeps its project Home fixed and reconciles restored settings with the Desktop preference mirror before reopening.
+
 ## Stability boundary
 
 The supported plugin-author surface is the `desktopProfiles`, `desktopPnpm`, and `desktopWindow` service contract described here and exported by `dsh-plugin-desktop-beta/profile-service`, `dsh-plugin-desktop-beta/pnpm`, and `dsh-plugin-desktop-beta/client`. Launcher bootstrap values, native adapters, generated shims, state-file formats, Loader row ordering, and Electron implementation details may change without becoming third-party APIs. Keep fallbacks explicit, lifecycle-scoped, and headless-safe.

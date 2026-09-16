@@ -1,13 +1,14 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
-const state = vi.hoisted(() => ({ runtimes: [] as any[], menu: vi.fn(), errors: vi.fn() }))
+const state = vi.hoisted(() => ({ runtimes: [] as any[], menu: vi.fn(), errors: vi.fn(), healthy: true,
+  hostStops: [] as ReturnType<typeof vi.fn>[], stopFails: false, beforeHealth: undefined as (() => Promise<void>) | undefined }))
 vi.mock('electron', () => ({
   app: { getPreferredSystemLanguages: () => ['zh-CN'] },
   dialog: { showErrorBox: (...args: unknown[]) => state.errors(...args) },
   Menu: { buildFromTemplate: (value: unknown) => value, setApplicationMenu: (...args: unknown[]) => state.menu(...args) },
   nativeImage: {}, Tray: class {},
 }))
-vi.mock('../src/electron-runtime.ts', () => ({ ElectronDesktopRuntime: class {
+vi.mock('../src/electron-runtime.ts', () => ({ desktopProductVersion: () => '2.0.10', ElectronDesktopRuntime: class {
   workspaceWindows: any
   locale = 'zh'
   scope: any
@@ -17,7 +18,11 @@ vi.mock('../src/electron-runtime.ts', () => ({ ElectronDesktopRuntime: class {
   show = vi.fn()
   prepareToQuit = vi.fn()
   mountScheduled = vi.fn()
-  beginRendererBootMonitoring = async () => ({ report: { status: 'healthy' } })
+  beginRendererBootMonitoring = async (options: {commitHealthy(): Promise<void>}) => {
+    await state.beforeHealth?.()
+    if (state.healthy) await options.commitHealthy()
+    return { report: { status: state.healthy ? 'healthy' : 'failed' } }
+  }
   constructor(public restart: any, _report: any, _a: any, _b: any, _store: any, _c: any, scope: any) {
     this.scope = scope
     this.workspaceWindows = scope.windows
@@ -25,19 +30,153 @@ vi.mock('../src/electron-runtime.ts', () => ({ ElectronDesktopRuntime: class {
   }
 } }))
 vi.mock('../src/host-process.ts', () => ({ startIsolatedDesktopHost: async (options: any) => {
-  options.bindHost({ fiber: { dispose: vi.fn() } })
+  const dispose = vi.fn(async () => { if (state.stopFails) throw new Error('Host still running') })
+  state.hostStops.push(dispose)
+  options.bindHost({ fiber: { dispose } })
 } }))
 vi.mock('../src/desktop-runtime-environment.ts', () => ({ installDesktopPnpmRuntime: () => ({ dispose() {} }) }))
 vi.mock('../src/packaged-runtime-path.ts', () => ({ packagedDependencyPath: () => '/test/pnpm.cjs' }))
 
 import { DesktopWorkbench, type DesktopWorkbenchLaunch, type DesktopWorkbenchTarget } from '../src/workbench.ts'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DesktopProfileCheckpoint } from '../src/profile-checkpoint.ts'
 
-beforeEach(() => { state.runtimes.length = 0; state.errors.mockClear(); state.menu.mockClear() })
+beforeEach(() => { state.runtimes.length = 0; state.errors.mockClear(); state.menu.mockClear(); state.healthy = true
+  state.hostStops.length = 0; state.stopFails = false; state.beforeHealth = undefined })
 
 describe('workspace application composition', () => {
+  it('reserves a project through preparation failure, recovery and retry', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'workbench-recover-'))
+    const launch = makeLaunch(root)
+    let finishRecovery!: (result: 'restart') => void
+    const recover = vi.fn(() => new Promise<'restart'>(resolve => { finishRecovery = resolve }))
+    const prepare = vi.fn().mockRejectedValueOnce(new Error('Invalid Profile YAML')).mockResolvedValue(launch)
+    const bench = new DesktopWorkbench({title: 'Test', labels: {open: 'Open', close: 'Close'}, pick: async () => undefined,
+      recover, resolve: async id => ({id, title: id, recovery: launch, prepare})})
+    try {
+      const first = bench.open('a')
+      await vi.waitFor(() => expect(recover).toHaveBeenCalledOnce())
+      const second = bench.open('a')
+      expect(state.runtimes).toHaveLength(0)
+      finishRecovery('restart')
+      await Promise.all([first, second])
+      expect(prepare).toHaveBeenCalledTimes(2)
+      expect(recover).toHaveBeenCalledWith('recovery', launch, expect.any(AbortSignal), 'Invalid Profile YAML')
+      expect(state.runtimes).toHaveLength(1)
+    } finally { await bench.close('a'); rmSync(root, {recursive: true, force: true}) }
+  })
+
+  it('stops only the requested project before maintenance and reopens it after completion', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'workbench-restart-'))
+    const launches = {a: makeLaunch(join(root, 'a')), b: makeLaunch(join(root, 'b'))}
+    const recover = vi.fn(async () => {
+      expect(state.hostStops[0]).toHaveBeenCalledOnce()
+      expect(state.hostStops[1]).not.toHaveBeenCalled()
+      expect(state.runtimes).toHaveLength(2)
+      return 'restart' as const
+    })
+    const bench = new DesktopWorkbench({title: 'Test', labels: {open: 'Open', close: 'Close'}, pick: async () => undefined,
+      recover, resolve: async id => ({id, title: id, prepare: async () => launches[id as 'a' | 'b']})})
+    try {
+      await bench.open('a'); await bench.open('b')
+      await state.runtimes[0].restart('recovery')
+      expect(recover).toHaveBeenCalledOnce()
+      expect(state.runtimes).toHaveLength(3)
+      expect(state.hostStops[1]).not.toHaveBeenCalled()
+    } finally { await bench.close('a'); await bench.close('b'); rmSync(root, {recursive: true, force: true}) }
+  })
+
+  it('cancels recovery without retrying and allows a later project open', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'workbench-cancel-recovery-'))
+    const launch = makeLaunch(root)
+    const prepare = vi.fn().mockRejectedValueOnce(new Error('bad config')).mockResolvedValue(launch)
+    const recover = vi.fn(async () => 'cancelled' as const)
+    const bench = new DesktopWorkbench({title: 'Test', labels: {open: 'Open', close: 'Close'}, pick: async () => undefined,
+      recover, resolve: async id => ({id, title: id, recovery: launch, prepare})})
+    try {
+      await expect(bench.open('a')).rejects.toMatchObject({name: 'AbortError'})
+      expect(prepare).toHaveBeenCalledOnce()
+      await bench.open('a')
+      expect(state.runtimes).toHaveLength(1)
+    } finally { await bench.close('a'); rmSync(root, {recursive: true, force: true}) }
+  })
+
+  it('refuses recovery and another Host while startup teardown is unconfirmed', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'workbench-stop-failure-'))
+    const launch = makeLaunch(root)
+    const recover = vi.fn(async () => 'restart' as const)
+    const bench = new DesktopWorkbench({title: 'Test', labels: {open: 'Open', close: 'Close'}, pick: async () => undefined,
+      recover, resolve: async id => ({id, title: id, prepare: async () => launch})})
+    try {
+      state.healthy = false; state.stopFails = true
+      await expect(bench.open('a')).rejects.toThrow('termination was not confirmed')
+      await expect(bench.open('a')).rejects.toThrow('Host still running')
+      expect(state.runtimes).toHaveLength(1)
+      expect(recover).not.toHaveBeenCalled()
+      state.stopFails = false; state.healthy = true
+      await bench.open('a')
+      expect(state.runtimes).toHaveLength(2)
+    } finally { state.stopFails = false; await bench.close('a'); rmSync(root, {recursive: true, force: true}) }
+  })
+
+  it('does not checkpoint a startup cancelled while waiting for renderer health', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'workbench-cancel-health-'))
+    const launch = makeLaunch(root)
+    let ready!: () => void
+    state.beforeHealth = () => new Promise<void>(resolve => { ready = resolve })
+    const bench = new DesktopWorkbench({title: 'Test', labels: {open: 'Open', close: 'Close'}, pick: async () => undefined,
+      resolve: async id => ({id, title: id, prepare: async () => launch})})
+    try {
+      const opened = bench.open('a')
+      const failed = expect(opened).rejects.toMatchObject({name: 'AbortError'})
+      await vi.waitFor(() => expect(ready).toBeTypeOf('function'))
+      const closed = bench.close('a')
+      ready()
+      await Promise.all([failed, closed])
+      const checkpoints = new DesktopProfileCheckpoint({userDataDir: launch.stateDir, homeDir: root,
+        profileDir: launch.prepared.profile.dir, profileName: 'desktop'})
+      expect(checkpoints.listSlots().some(slot => slot.snapshotExists)).toBe(false)
+    } finally { await bench.close('a'); rmSync(root, {recursive: true, force: true}) }
+  })
+
+  it('keeps a healthy window usable when the checkpoint cannot be written', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'workbench-checkpoint-error-'))
+    const launch = makeLaunch(root)
+    const capture = vi.spyOn(DesktopProfileCheckpoint.prototype, 'captureHealthy').mockImplementation(() => {throw new Error('disk full')})
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const bench = new DesktopWorkbench({title: 'Test', labels: {open: 'Open', close: 'Close'}, pick: async () => undefined,
+      resolve: async id => ({id, title: id, prepare: async () => launch})})
+    try {
+      await bench.open('a')
+      expect(logged).toHaveBeenCalledWith(expect.stringContaining('disk full'))
+      expect(state.hostStops[0]).not.toHaveBeenCalled()
+    } finally { capture.mockRestore(); logged.mockRestore(); await bench.close('a'); rmSync(root, {recursive: true, force: true}) }
+  })
+
+  it('captures only healthy starts and keeps each project checkpoint separate', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'workbench-checkpoints-'))
+    const launches = {a: makeLaunch(join(root, 'a')), b: makeLaunch(join(root, 'b'))}
+    const bench = new DesktopWorkbench({title: 'Test', labels: {open: 'Open', close: 'Close'}, pick: async () => undefined,
+      resolve: async id => ({id, title: id, prepare: async () => launches[id as 'a' | 'b']}),
+    })
+    const checkpoints = (id: 'a' | 'b') => new DesktopProfileCheckpoint({userDataDir: launches[id].stateDir,
+      homeDir: launches[id].homeDir, profileDir: launches[id].prepared.profile.dir, profileName: 'desktop'})
+    try {
+      await bench.open('a')
+      expect(checkpoints('a').listSlots().filter(slot => slot.snapshotExists)).toHaveLength(1)
+      expect(checkpoints('b').listSlots().filter(slot => slot.snapshotExists)).toHaveLength(0)
+      await bench.open('b')
+      await bench.close('a')
+      state.healthy = false
+      await expect(bench.open('a')).rejects.toThrow('Window renderer failed')
+      expect(checkpoints('a').listSlots().filter(slot => slot.snapshotExists)).toHaveLength(1)
+      expect(checkpoints('b').listSlots().filter(slot => slot.snapshotExists)).toHaveLength(1)
+      expect(state.runtimes[1].prepareToQuit).not.toHaveBeenCalled()
+    } finally { await bench.close('a'); await bench.close('b'); rmSync(root, {recursive: true, force: true}) }
+  })
+
   it('preserves native commands, binds each terminal to its Profile, and deduplicates projects', async () => {
     const root = mkdtempSync(join(tmpdir(), 'workbench-menu-'))
     const launch = makeLaunch(root)
@@ -93,6 +232,11 @@ describe('workspace application composition', () => {
 })
 
 function makeLaunch(root: string): DesktopWorkbenchLaunch {
+  mkdirSync(join(root, 'profile'), {recursive: true})
+  mkdirSync(join(root, 'electron'), {recursive: true})
+  writeFileSync(join(root, 'profile/package.json'), JSON.stringify({name: 'workbench-test', dependencies: {}}))
+  writeFileSync(join(root, 'profile/cordis.patch.yml'), '[]\n')
+  writeFileSync(join(root, 'settings.yaml'), '{}\n')
   return { homeDir: root, stateDir: join(root, 'electron'), cwd: root, environment: {}, presentation: 'project',
     prepared: {mode: 'advanced', openBrowser: false, networkExposure: 'loopback', profile: {name: 'desktop', dir: join(root, 'profile')}} as DesktopWorkbenchLaunch['prepared'],
     preferences: {mode: 'advanced', openBrowser: false, networkExposure: 'loopback', market: 'disabled', aaEnabled: false, notifications: {enabled: false}} as DesktopWorkbenchLaunch['preferences'] }

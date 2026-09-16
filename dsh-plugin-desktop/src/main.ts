@@ -125,6 +125,8 @@ import {
   type SkippedOptionalEntry,
 } from './profile.ts'
 import { DesktopProfileCheckpoint } from './profile-checkpoint.ts'
+import { createWorkbenchMaintenanceExit, WORKBENCH_MAINTENANCE_ENV } from './workbench-maintenance.ts'
+import { reconcileWorkbenchCheckpointSettings } from './workbench-checkpoint.ts'
 import {
   completeOrSkipDesktopSetupWizard,
   desktopSetupWizardRequired,
@@ -207,6 +209,8 @@ import {
 import { desktopRecoveryCopy } from './recovery-copy.ts'
 
 const BIN_NAME = DESKTOP_PACKAGE_NAME
+const workbenchMaintenance = process.env[WORKBENCH_MAINTENANCE_ENV] === '1'
+const launcherExit = createWorkbenchMaintenanceExit(app, workbenchMaintenance)
 const PRODUCT_NAME = DESKTOP_PRODUCT_NAME
 
 function withDesktopDshHome(
@@ -493,9 +497,9 @@ async function start(): Promise<void> {
     {
       prepareToQuit: () => { runtime.prepareToQuit() },
       relaunch: args => {
-        app.relaunch({ args: [...(args ?? desktopDefaultRelaunchArguments())] })
+        launcherExit.relaunch(args ?? desktopDefaultRelaunchArguments())
       },
-      exit: code => { app.exit(code) },
+      exit: code => { launcherExit.exit(code) },
     },
     () => {
       removeShutdownRequests?.()
@@ -693,6 +697,9 @@ async function start(): Promise<void> {
     let homeDir: string
     if (safeModePaths !== undefined) {
       homeDir = safeModePaths.homeDir
+    } else if (workbenchMaintenance) {
+      // A project owns its Home; installation-wide directory selection must not redirect recovery.
+      homeDir = fallbackHome
     } else {
       dataDirectoryLocation = resolveDesktopDataDirectory(
         desktopUserDataDir,
@@ -1050,6 +1057,9 @@ async function start(): Promise<void> {
           if (error.length > 0) throw new Error(error)
         },
         afterCheckpointRestore: async result => {
+          if (workbenchMaintenance) {
+            await reconcileWorkbenchCheckpointSettings(profileUserDataDir, activeProfileDir, homeDir)
+          }
           if (!result.dependencyMaterializationRequired) return
           try {
             await materializeProfile({
@@ -1079,7 +1089,9 @@ async function start(): Promise<void> {
     }
     if (recoveryModeRequested) {
       const recoveryResult = await openStartupRecoveryWindow(
-        'Recovery mode was requested from the Desktop restart menu.',
+        workbenchMaintenance && process.env.DSH_DESKTOP_WORKBENCH_FAILURE_DETAIL
+          ? maskSecrets(process.env.DSH_DESKTOP_WORKBENCH_FAILURE_DETAIL)
+          : 'Recovery mode was requested from the Desktop restart menu.',
         startupRecoveryController,
         true,
       )
@@ -1089,7 +1101,8 @@ async function start(): Promise<void> {
       else if (recoveryResult === 'safe-mode') {
         nativeExit.requestRelaunch(desktopSafeModeRelaunchArguments())
       }
-      await shutdown.request(recoveryResult === 'restart' || recoveryResult === 'safe-mode' ? 0 : 1)
+      await shutdown.request(recoveryResult === 'restart' || recoveryResult === 'safe-mode'
+        || (workbenchMaintenance && recoveryResult === 'quit') ? 0 : 1)
       return
     }
     startupStage = 'profile-composition'
@@ -1701,6 +1714,8 @@ async function start(): Promise<void> {
       } else if (recoveryResult === 'safe-mode') {
         nativeExit.requestRelaunch(desktopSafeModeRelaunchArguments())
         exitCode = 0
+      } else if (workbenchMaintenance && recoveryResult === 'quit') {
+        exitCode = 0
       }
     }
     startupRecoveryController?.dispose()
@@ -1757,10 +1772,10 @@ async function handleFatalLauncherFailure(cause: unknown): Promise<void> {
     })
     const result = await recoveryWindow.run()
     if (result === 'restart') {
-      app.relaunch()
-      app.exit(0)
+      launcherExit.relaunch(desktopDefaultRelaunchArguments())
+      launcherExit.exit(0)
     } else {
-      app.exit(1)
+      launcherExit.exit(workbenchMaintenance && result === 'quit' ? 0 : 1)
     }
   } catch (windowCause) {
     process.stderr.write(
