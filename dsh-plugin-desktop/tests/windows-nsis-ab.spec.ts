@@ -156,6 +156,7 @@ describe('Windows NSIS A/B packaging', () => {
     expect(calls[3]?.args).toContain('--unsafe-paths')
     expect(calls[3]?.args).toContain('--directory=.')
     expect(calls[3]?.args).toContain('--include=templates/nsis/include/extractAppPackage.nsh')
+    expect(calls[3]?.args).toContain('--include=./templates/nsis/include/extractAppPackage.nsh')
     expect(calls[3]?.env.GIT_CEILING_DIRECTORIES)
       .toBe(join(options.outputRoot, '.staged-builder', 'node_modules'))
     expect(calls[4]?.args).toContain(`--prepackaged=${join(options.outputRoot, 'prepackaged', 'win-unpacked')}`)
@@ -267,6 +268,7 @@ describe('Windows NSIS A/B packaging', () => {
       '--unsafe-paths',
       '--directory=.',
       '--include=templates/nsis/include/extractAppPackage.nsh',
+      '--include=./templates/nsis/include/extractAppPackage.nsh',
       fileURLToPath(new URL('../../patches/app-builder-lib@26.15.7.patch', import.meta.url)),
     ], {
       env: {

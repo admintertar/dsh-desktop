@@ -260,6 +260,8 @@ export function buildWindowsNsisAb(options: WindowsNsisAbBuildOptions): WindowsN
       // Anchor package-relative patch paths at the isolated -C directory.
       '--directory=.',
       '--include=templates/nsis/include/extractAppPackage.nsh',
+      // Apple Git 2.39 preserves the directory prefix when matching includes.
+      '--include=./templates/nsis/include/extractAppPackage.nsh',
       options.appBuilderPatch,
     ],
     options.workspaceRoot,
